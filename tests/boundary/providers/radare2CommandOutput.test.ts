@@ -42,14 +42,25 @@ describe("projectRadare2Summary", () => {
     ]);
   });
 
-  it("reduces izzj entries to string, addr, and length", async () => {
+  it("reduces producer-shaped izzj entries to string, vaddr, paddr, and length", async () => {
     const { projectRadare2Summary } =
       await import("../../../src/radare2/radare2CommandOutput.js");
     expect(
       projectRadare2Summary("izzj", [
-        { addr: 4096, string: "/lib/ld.so", length: 10, section: ".rodata" },
+        {
+          vaddr: 4294984340,
+          paddr: 12288,
+          string: "/lib/ld.so",
+          length: 10,
+          section: ".rodata",
+          type: "ascii",
+          ordinal: 1,
+          size: 11,
+        },
       ]),
-    ).toEqual([{ addr: 4096, string: "/lib/ld.so", length: 10 }]);
+    ).toEqual([
+      { string: "/lib/ld.so", vaddr: 4294984340, paddr: 12288, length: 10 },
+    ]);
   });
 
   it("returns undefined for other commands and non-array output", async () => {
@@ -57,5 +68,48 @@ describe("projectRadare2Summary", () => {
       await import("../../../src/radare2/radare2CommandOutput.js");
     expect(projectRadare2Summary("pdg @ main", { code: 1 })).toBeUndefined();
     expect(projectRadare2Summary("aflj", { not: "array" })).toBeUndefined();
+  });
+});
+
+describe("projectRadare2DeliveryViews", () => {
+  it("degrades to raw output when parsed JSON holds non-finite numbers", async () => {
+    const { projectRadare2DeliveryViews } =
+      await import("../../../src/radare2/radare2CommandOutput.js");
+    expect(projectRadare2DeliveryViews("aflj", "1e400")).toEqual({});
+    expect(
+      projectRadare2DeliveryViews("aflj", '[{"name":"main","addr":1e400}]'),
+    ).toEqual({});
+    // Integers beyond Number.MAX_SAFE_INTEGER round silently; the projection
+    // must degrade instead of shipping the rounded value.
+    expect(
+      projectRadare2DeliveryViews(
+        "aflj",
+        '[{"name":"main","addr":9007199254740993}]',
+      ),
+    ).toEqual({});
+    // Faithful alternate spellings keep the projection: 1.0, 1e3, and
+    // trailing-zero decimals are exactly representable even though their
+    // canonical spelling differs.
+    expect(
+      projectRadare2DeliveryViews("aflj", '[{"name":"main","size":1.0}]'),
+    ).toEqual({
+      parsed: [{ name: "main", size: 1 }],
+      summary: [{ name: "main", size: 1 }],
+    });
+    expect(
+      projectRadare2DeliveryViews("aflj", '[{"name":"main","addr":1e3}]'),
+    ).toEqual({
+      parsed: [{ name: "main", addr: 1000 }],
+      summary: [{ name: "main", addr: 1000 }],
+    });
+  });
+
+  it("keeps views for finite JSON values", async () => {
+    const { projectRadare2DeliveryViews } =
+      await import("../../../src/radare2/radare2CommandOutput.js");
+    expect(projectRadare2DeliveryViews("aflj", '[{"name":"main"}]')).toEqual({
+      parsed: [{ name: "main" }],
+      summary: [{ name: "main" }],
+    });
   });
 });

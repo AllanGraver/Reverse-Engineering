@@ -1,5 +1,4 @@
-import { resolve } from "node:path";
-
+import { absoluteCallerPath } from "../filesystem/callerPath.js";
 import type { Radiff2Input } from "../domain/reverseEngineering.js";
 
 export const RADIFF2_PROVIDER_IDENTITY = {
@@ -9,7 +8,9 @@ export const RADIFF2_PROVIDER_IDENTITY = {
 } as const;
 
 /** Build a one-shot radiff2 comparison of two local artifacts. */
-export const radiff2Command = (input: Radiff2Input): readonly string[] =>
-  input.operation === "functions"
-    ? ["-Cj", "-A", resolve(input.path_a), resolve(input.path_b)]
-    : ["-A", resolve(input.path_a), resolve(input.path_b)];
+export const radiff2Command = (input: Radiff2Input): readonly string[] => [
+  ...(input.operation === "functions" ? ["-Cj"] : []),
+  "-A",
+  absoluteCallerPath(input.path_a),
+  absoluteCallerPath(input.path_b),
+];

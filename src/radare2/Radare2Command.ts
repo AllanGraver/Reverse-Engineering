@@ -1,5 +1,4 @@
-import { resolve } from "node:path";
-
+import { absoluteCallerPath } from "../filesystem/callerPath.js";
 import type { Radare2Input } from "../domain/reverseEngineering.js";
 
 export const RADARE2_PROVIDER_IDENTITY = {
@@ -14,7 +13,9 @@ export const radare2Command = (input: Radare2Input): readonly string[] => [
   "-q",
   "-e",
   "scr.color=0",
+  "-e",
+  "scr.utf8=0",
   "-c",
   input.command,
-  resolve(input.path),
+  absoluteCallerPath(input.path),
 ];

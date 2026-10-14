@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isUtf8 } from "node:buffer";
-import { resolve } from "node:path";
-
 import {
   AnalysisCancelledError,
   AnalysisInputError,
@@ -14,12 +12,19 @@ import type {
   AnalysisErrorOptions,
 } from "../domain/analysisErrorBase.js";
 import { createEvidence, type Evidence } from "../domain/evidence.js";
+import { absoluteCallerPath } from "../filesystem/callerPath.js";
+import type { JsonValue } from "../domain/jsonValue.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
   ProviderProcessSupervisor,
   spawnOwnedProviderProcess,
   type SpawnedOwnedProviderProcess,
 } from "../process/ProviderProcess.js";
+import {
+  projectRadare2JsonOutput,
+  projectRadare2Summary,
+  projectRadare2DeliveryViews,
+} from "./radare2CommandOutput.js";
 
 const MAX_SESSIONS = 8;
 const MAX_PENDING_COMMANDS = 16;
@@ -54,6 +59,8 @@ export interface Radare2CommandResult {
     readonly origin?: string;
     readonly message: string;
   }>;
+  readonly parsed?: JsonValue;
+  readonly summary?: ReadonlyArray<JsonValue>;
 }
 
 interface R2Pipe2Reply {
@@ -206,6 +213,7 @@ export class Radare2SessionManager {
   #sessionReservations = 0;
   #closingAll = false;
   readonly #startDrainWaiters: Array<() => void> = [];
+  readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #command: string;
   readonly #frameTimeoutMs: number;
   readonly #startupTimeoutMs: number;
@@ -216,6 +224,7 @@ export class Radare2SessionManager {
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
     options: Radare2SessionManagerOptions = {},
   ) {
+    this.#environment = { ...environment };
     this.#command = environment.REA_R2_COMMAND ?? "radare2";
     this.#frameTimeoutMs = options.frameTimeoutMs ?? FRAME_TIMEOUT_MS;
     this.#startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
@@ -267,13 +276,22 @@ export class Radare2SessionManager {
     if (input.path.length === 0)
       return err(new AnalysisInputError("start_radare2_session"));
     const id = randomUUID();
-    const resolvedPath = resolve(input.path);
+    const resolvedPath = absoluteCallerPath(input.path);
     let launched: SpawnedOwnedProviderProcess;
     try {
       launched = await this.#spawnProcess({
         command: this.#command,
-        arguments: ["-N", "-q", "-e", "scr.color=0", "-0", resolvedPath],
-        hostEnvironment: process.env,
+        arguments: [
+          "-N",
+          "-q",
+          "-e",
+          "scr.color=0",
+          "-e",
+          "scr.utf8=0",
+          "-0",
+          resolvedPath,
+        ],
+        hostEnvironment: this.#environment,
         runId: id,
         stdin: "pipe",
         ...(signal === undefined ? {} : { signal }),
@@ -298,7 +316,7 @@ export class Radare2SessionManager {
       callerSelectedPath: input.path,
       resolvedPath,
       supervisor: new ProviderProcessSupervisor(
-        { process: launched.process, ownsProcessLifetime: false },
+        { process: launched.process, ownsProcessLifetime: true },
         { captureStdout: false, maxDiagnosticBytes: MAX_DIAGNOSTIC_BYTES },
       ),
       frames: [],
@@ -356,9 +374,8 @@ export class Radare2SessionManager {
       session.ready = true;
       return ok({ session_id: id });
     } catch (cause) {
-      const stopped = await this.#stopSession(session);
+      const stopped = await this.#stopAndRetire(session);
       const capturedOutput = this.#startupCapturedOutput(session);
-      if (stopped.status !== "incomplete") this.#sessions.delete(id);
       if (stopped.status === "incomplete")
         return err(
           this.#retainCleanupFailure(
@@ -447,7 +464,12 @@ export class Radare2SessionManager {
     let commandSent = false;
     const previous = session.commandTail;
     session.commandTail = new Promise<void>((resolve) => {
-      release = resolve;
+      // A cancelled waiter still holds the queue tail until its predecessor
+      // finishes; releasing it early would let the next command overlap the
+      // still-running one.
+      release = () => {
+        previous.catch(() => undefined).then(() => resolve());
+      };
     });
     try {
       await waitForTurn(previous, signal);
@@ -503,14 +525,14 @@ export class Radare2SessionManager {
         session,
         this.#frameTimeoutMs,
         signal,
-        () => new Radare2CommandTimeoutError("", false),
+        () => new Radare2CommandTimeoutError(bufferedFrameText(session), false),
       );
       if (signal?.aborted) throw new AnalysisCancelledError("radare2_command");
       let cleanupFailure: string | undefined;
       let parsedReply: R2Pipe2Reply | undefined;
       let outputTruncated = false;
       if (reply.truncated) {
-        const stopped = await this.#stopSession(session);
+        const stopped = await this.#stopAndRetire(session);
         if (stopped.status === "incomplete") cleanupFailure = stopped.reason;
         outputTruncated = true;
       } else {
@@ -518,7 +540,43 @@ export class Radare2SessionManager {
         if (parsedReply === undefined) {
           session.protocolError =
             "Radare2 returned a frame that is not a r2pipe2 JSON reply; the session was stopped because the protocol no longer holds.";
-          return err(await this.#errorAfterProtocolFailure(session, undefined));
+          const cause = new Error(session.protocolError);
+          const partialEvidence = this.#commandEvidence(
+            session,
+            command,
+            {
+              command,
+              output: boundedText(reply.text),
+              output_truncated: false,
+              completion_status: "unknown",
+              command_error: false,
+              command_code: null,
+              command_logs: [],
+            },
+            [
+              "The reply frame was not valid r2pipe2 JSON; retained frame text is partial and command completion is unknown.",
+              "The owned Radare2 session was stopped because the protocol no longer holds.",
+              "The command is unrestricted and may access local files, the shell, network, or mutate files.",
+            ],
+          );
+          const stopped = await this.#stopAndRetire(session);
+          if (stopped.status === "incomplete")
+            return err(
+              this.#retainCleanupFailure(
+                session,
+                "radare2_command",
+                stopped.reason,
+                { cause, partialObservation: partialEvidence },
+              ),
+            );
+          return err(
+            new AnalysisCapabilityUnavailableError(
+              "radare2",
+              "radare2_command",
+              session.protocolError,
+              { cause, partialObservation: partialEvidence },
+            ),
+          );
         }
       }
       const result: Radare2CommandResult = {
@@ -530,8 +588,12 @@ export class Radare2SessionManager {
         command_code: parsedReply === undefined ? null : parsedReply.code,
         command_logs: parsedReply === undefined ? [] : parsedReply.logs,
         ...(reply.invalidUtf8 ? { output_invalid_utf8: true as const } : {}),
+        ...projectRadare2DeliveryViews(
+          command,
+          parsedReply === undefined ? reply.text : parsedReply.res,
+        ),
       };
-      const evidence = this.#commandEvidence(sessionId, command, result, [
+      const evidence = this.#commandEvidence(session, command, result, [
         "Radare2 command output is the `res` field of one r2pipe2 JSON reply; radare2 reports many command failures with error:false and the reason in `logs`, which is preserved in command_logs.",
         ...(outputTruncated
           ? [
@@ -558,7 +620,7 @@ export class Radare2SessionManager {
           return err(new AnalysisCancelledError("radare2_command", { cause }));
         session.protocolError =
           "A Radare2 command was cancelled; the owned session was stopped because command output can no longer be correlated safely.";
-        const stopped = await this.#stopSession(session);
+        const stopped = await this.#stopAndRetire(session);
         if (stopped.status === "incomplete")
           return err(
             this.#retainCleanupFailure(
@@ -570,14 +632,13 @@ export class Radare2SessionManager {
               },
             ),
           );
-        this.#sessions.delete(sessionId);
         return err(new AnalysisCancelledError("radare2_command", { cause }));
       }
       if (cause instanceof Radare2CommandTimeoutError) {
         session.protocolError =
           "A Radare2 command timed out; the owned session was stopped because command output can no longer be correlated safely.";
         const partialEvidence = this.#commandEvidence(
-          sessionId,
+          session,
           command,
           {
             command,
@@ -597,7 +658,7 @@ export class Radare2SessionManager {
             "The command is unrestricted and may access local files, the shell, network, or mutate files.",
           ],
         );
-        const stopped = await this.#stopSession(session);
+        const stopped = await this.#stopAndRetire(session);
         if (stopped.status === "incomplete")
           return err(
             this.#retainCleanupFailure(
@@ -607,7 +668,6 @@ export class Radare2SessionManager {
               { cause, partialObservation: partialEvidence },
             ),
           );
-        this.#sessions.delete(sessionId);
         return err(
           new AnalysisTimeoutError("radare2_command", this.#frameTimeoutMs, {
             cause,
@@ -620,7 +680,7 @@ export class Radare2SessionManager {
           cause.partialOutput.length === 0
             ? undefined
             : this.#commandEvidence(
-                sessionId,
+                session,
                 command,
                 {
                   command,
@@ -639,6 +699,21 @@ export class Radare2SessionManager {
                   "The command is unrestricted and may access local files, the shell, network, or mutate files.",
                 ],
               );
+        const stopped = await this.#stopAndRetire(session);
+        if (stopped.status === "incomplete")
+          return err(
+            this.#retainCleanupFailure(
+              session,
+              "radare2_command",
+              stopped.reason,
+              {
+                cause,
+                ...(partialEvidence === undefined
+                  ? {}
+                  : { partialObservation: partialEvidence }),
+              },
+            ),
+          );
         return err(
           new AnalysisCapabilityUnavailableError(
             "radare2",
@@ -709,7 +784,7 @@ export class Radare2SessionManager {
     if (session === undefined)
       return err(new AnalysisInputError("close_radare2_session"));
     session.closing = true;
-    const stopped = await this.#stopSession(session);
+    const stopped = await this.#stopAndRetire(session);
     if (stopped.status === "incomplete")
       return err(
         this.#retainCleanupFailure(
@@ -718,14 +793,13 @@ export class Radare2SessionManager {
           stopped.reason,
         ),
       );
-    this.#sessions.delete(sessionId);
     return ok({ closed: true as const });
   }
 
   async retryCleanupFailures(): Promise<Result<null, AnalysisError>> {
     for (const session of this.#sessions.values()) {
       if (session.cleanupFailures.size === 0) continue;
-      const stopped = await this.#stopSession(session);
+      const stopped = await this.#stopAndRetire(session);
       if (stopped.status === "incomplete")
         return err(
           [...session.cleanupFailures].at(-1) ??
@@ -735,7 +809,6 @@ export class Radare2SessionManager {
               stopped.reason,
             ),
         );
-      this.#sessions.delete(session.id);
     }
     return ok(null);
   }
@@ -750,31 +823,25 @@ export class Radare2SessionManager {
     for (const session of sessions) session.closing = true;
     await Promise.all(
       sessions.map(async (session) => {
-        const stopped = await this.#stopSession(session);
-        if (stopped.status !== "incomplete") this.#sessions.delete(session.id);
+        await this.#stopAndRetire(session);
       }),
     );
   }
 
   #commandEvidence(
-    sessionId: string,
+    session: Radare2Session,
     command: string,
     result: Radare2CommandResult,
     limitations: readonly string[],
   ): Evidence {
-    const session = this.#sessions.get(sessionId);
     return createEvidence(undefined, RADARE2_SESSION_PROVIDER_IDENTITY, {
       predicateType: "rea.reverse-engineering.command-observation",
       operation: "radare2_command",
       parameters: {
-        session_id: sessionId,
+        session_id: session.id,
         command,
-        ...(session === undefined
-          ? {}
-          : {
-              caller_selected_path: session.callerSelectedPath,
-              resolved_path: session.resolvedPath,
-            }),
+        caller_selected_path: session.callerSelectedPath,
+        resolved_path: session.resolvedPath,
       },
       result: {
         completion_status: result.completion_status,
@@ -796,6 +863,10 @@ export class Radare2SessionManager {
                 ...log,
               })),
             }),
+        ...(result.parsed === undefined ? {} : { parsed: result.parsed }),
+        ...(result.summary === undefined
+          ? {}
+          : { summary: result.summary.map((entry) => entry) }),
       },
       limitations,
     });
@@ -918,6 +989,26 @@ export class Radare2SessionManager {
     for (const waiter of session.frameWaiters)
       waiter.reject(new Error(message));
     session.frameWaiters.length = 0;
+    // An unusable session must not keep its engine running just because no
+    // command is waiting: start owned cleanup immediately and retire the
+    // session when the stop is verified.
+    if (
+      session.stopAttempt === undefined &&
+      !session.closing &&
+      !session.exited &&
+      session.ready
+    ) {
+      void this.#stopSession(session).then((stopped) => {
+        if (stopped.status !== "incomplete") this.#sessions.delete(session.id);
+      });
+    }
+  }
+
+  /** Stop one owned session and retire it once the stop is verified. */
+  async #stopAndRetire(session: Radare2Session): Promise<StopOutcome> {
+    const stopped = await this.#stopSession(session);
+    if (stopped.status !== "incomplete") this.#sessions.delete(session.id);
+    return stopped;
   }
 
   async #stopSession(session: Radare2Session): Promise<StopOutcome> {
@@ -934,7 +1025,7 @@ export class Radare2SessionManager {
     session: Radare2Session,
     cause: unknown,
   ): Promise<AnalysisError> {
-    const stopped = await this.#stopSession(session);
+    const stopped = await this.#stopAndRetire(session);
     if (stopped.status === "incomplete")
       return this.#retainCleanupFailure(
         session,
@@ -942,7 +1033,6 @@ export class Radare2SessionManager {
         stopped.reason,
         { cause },
       );
-    this.#sessions.delete(session.id);
     return new AnalysisCapabilityUnavailableError(
       "radare2",
       "radare2_command",
@@ -1089,6 +1179,18 @@ const waitForTurn = (
       resolve();
     });
   });
+};
+
+/** Bounded partial frame text for failure diagnostics (never unbounded). */
+const boundedText = (value: string): string =>
+  value.length > 4096 ? `${value.slice(0, 4096)}…` : value;
+
+const bufferedFrameText = (session: Radare2Session): string =>
+  boundedFrameBytes(session).toString("utf8");
+
+const boundedFrameBytes = (session: Radare2Session): Buffer => {
+  const bytes = Buffer.concat(session.frameChunks, session.bufferedFrameBytes);
+  return bytes.length > 4096 ? bytes.subarray(0, 4096) : bytes;
 };
 
 const truncateUtf8 = (value: string, maximumBytes: number): string => {

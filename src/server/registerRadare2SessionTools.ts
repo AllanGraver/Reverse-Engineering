@@ -5,6 +5,7 @@ import type { EvidenceWriter } from "../application/investigation/InvestigationR
 import { toolContract } from "../contracts/toolContracts.js";
 import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { AnalysisOutputError } from "../domain/analysisErrorCore.js";
+import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import type { Radare2SessionManager } from "../radare2/Radare2SessionManager.js";
 import { projectRadare2JsonOutput } from "../radare2/radare2CommandOutput.js";
 import { projectRadare2Summary } from "../radare2/radare2CommandOutput.js";
@@ -66,19 +67,36 @@ export const registerRadare2SessionTools = (
                 command,
                 context.mcpReq.signal,
               );
-              if (executed.ok && !executed.value.result.command_error) continue;
-              await manager
+              if (
+                executed.ok &&
+                !executed.value.result.command_error &&
+                executed.value.result.completion_status === "complete"
+              )
+                continue;
+              const closed = await manager
                 .close(started.value.session_id)
                 .catch(() => undefined);
               if (!executed.ok) return executed;
+              const failure = new AnalysisOutputError(
+                start.name,
+                executed.value.result.completion_status === "unknown"
+                  ? `An initial Radare2 command could not complete (output or frame limit reached): ${command}`
+                  : `An initial Radare2 command reported an error: ${executed.value.result.command_logs.map((log) => log.message).join("; ") || executed.value.result.command}`,
+                { partialObservation: executed.value.evidence },
+              );
+              // A failed close keeps the engine owned; retaining its cleanup
+              // state keeps the unresolved resource visible and retryable.
               return {
                 ...executed,
                 ok: false as const,
-                error: new AnalysisOutputError(
-                  start.name,
-                  `An initial Radare2 command reported an error: ${executed.value.result.command_logs.map((log) => log.message).join("; ") || executed.value.result.command}`,
-                  { partialObservation: executed.value.evidence },
-                ),
+                error:
+                  closed === undefined || closed.ok
+                    ? failure
+                    : analysisErrorWithCleanupFailure(
+                        failure,
+                        closed.error,
+                        start.name,
+                      ),
               };
             }
             return started;
@@ -127,43 +145,9 @@ export const registerRadare2SessionTools = (
         }
         return delivery.toCallToolResult(result, command);
       }
-      const projection = projectRadare2JsonOutput(result.value.result.output);
-      const summary =
-        projection === undefined
-          ? undefined
-          : projectRadare2Summary(
-              result.value.result.command,
-              projection.parsed,
-            );
-      const observed = result.value.result;
-      const commandResult = {
-        command: observed.command,
-        output: observed.output,
-        output_truncated: observed.output_truncated,
-        ...(observed.output_invalid_utf8
-          ? { output_invalid_utf8: true as const }
-          : {}),
-        completion_status: observed.completion_status,
-        command_error: observed.command_error,
-        command_code: observed.command_code,
-        command_logs: observed.command_logs.map((log) => ({
-          type: log.type,
-          message: log.message,
-          ...(log.origin === undefined ? {} : { origin: log.origin }),
-        })),
-        ...(projection === undefined ? {} : { parsed: projection.parsed }),
-        ...(summary === undefined ? {} : { summary }),
-      };
       const evidence = result.value.evidence;
       return delivery.toEvidenceToolResult(
-        {
-          ...evidence,
-          raw_result: { ...asObject(evidence.raw_result), ...commandResult },
-          normalized_result: {
-            ...asObject(evidence.normalized_result),
-            ...commandResult,
-          },
-        },
+        evidence,
         command,
         recordEvidence?.(evidence),
       );

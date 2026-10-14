@@ -25,6 +25,13 @@ const probeRadare2 = async (): Promise<string | null> => {
 };
 
 const version = await probeRadare2();
+// CI sets REA_R2_REQUIRED=1 so the lane fails loudly instead of silently
+// skipping when the engine probe cannot establish a usable version.
+const required = process.env.REA_R2_REQUIRED === "1";
+if (required && version === null)
+  throw new Error(
+    "REA_R2_REQUIRED is set but no usable radare2 >= 5.9 was found",
+  );
 
 describe.skipIf(version === null)(
   `real radare2 provider (${version ?? "unavailable"})`,
@@ -32,7 +39,7 @@ describe.skipIf(version === null)(
     it("returns JSON binary information through the one-shot command", async () => {
       const service = new TestReverseEngineeringService();
       const result = await service.executeRadare2Command({
-        path: "/bin/ls",
+        path: process.execPath,
         command: "ij",
       });
       expect(result.ok).toBe(true);
@@ -49,7 +56,7 @@ describe.skipIf(version === null)(
 
     it("answers session commands over the r2pipe2 protocol", async () => {
       const manager = new Radare2SessionManager();
-      const started = await manager.start({ path: "/bin/ls" });
+      const started = await manager.start({ path: process.execPath });
       expect(started.ok).toBe(true);
       if (!started.ok) return;
       const sessionId = started.value.session_id;

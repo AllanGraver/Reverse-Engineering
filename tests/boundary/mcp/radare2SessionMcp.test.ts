@@ -7,9 +7,11 @@ import pino from "pino";
 import { expect, it } from "vitest";
 
 import { createEvidence } from "../../../src/domain/evidence.js";
-import { ok } from "../../../src/domain/result.js";
+import { AnalysisCapabilityUnavailableError } from "../../../src/domain/analysisErrorCore.js";
+import { err, ok } from "../../../src/domain/result.js";
 import { registerRadare2SessionTools } from "../../../src/server/registerRadare2SessionTools.js";
 import { createToolResultDelivery } from "../../../src/server/toolResult.js";
+import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createProviderEnvironmentMcpHarness } from "../../support/reverseDebuggerMcpTestHelpers.js";
 import {
   createReverseEngineeringMcpHarness,
@@ -84,6 +86,11 @@ it("runs a full radare2 session lifecycle through MCP", async () => {
   const commandContent = JSON.stringify(command.structuredContent);
   expect(commandContent).toContain('[{"name":"main"}]');
   expect(commandContent).toContain('"parsed"');
+  // Delivered copies must stay authenticated: the identifier is
+  // content-addressed, so post-hoc field injection would invalidate it.
+  expect(() =>
+    parseEvidence(command.structuredContent as unknown),
+  ).not.toThrow();
 
   const status = await client.callTool({
     name: "radare2_session_status",
@@ -186,6 +193,73 @@ it("passes the radare2_command operation name to admitted external mutations", a
   });
 
   expect(admittedNames).toEqual(["radare2_command"]);
+});
+
+it("reports retained cleanup when a failed start cannot verify the session stop", async () => {
+  const evidence = createEvidence(
+    undefined,
+    { id: "radare2.session", name: "Radare2 session", version: null },
+    {
+      predicateType: "rea.reverse-engineering.command-observation",
+      operation: "radare2_command",
+      parameters: { session_id: "session-1", command: "__fail__" },
+      result: {
+        completion_status: "complete",
+        output_truncated: false,
+        command_error: true,
+      },
+      rawResult: { command: "__fail__", output: "" },
+    },
+  );
+  const { server, handler } = createReverseEngineeringMcpHarness();
+  registerRadare2SessionTools(
+    server,
+    {
+      start: async () => ok({ session_id: "session-1" }),
+      execute: async () =>
+        ok({
+          result: {
+            command: "__fail__",
+            output: "",
+            output_truncated: false,
+            completion_status: "complete" as const,
+            command_error: true,
+            command_code: 1,
+            command_logs: [],
+          },
+          evidence,
+        }),
+      status: () => undefined,
+      close: async () =>
+        err(
+          new AnalysisCapabilityUnavailableError(
+            "radare2",
+            "close_radare2_session",
+            "The owned Radare2 process could not be confirmed stopped: injected uncertainty",
+            {
+              cleanup: {
+                reason: "injected uncertainty",
+                resources: ["session-1"],
+              },
+            },
+          ),
+        ),
+      retryCleanupFailures: async () => ok(null),
+    },
+    pino({ enabled: false }),
+    createToolResultDelivery(2 * 1024 * 1024),
+  );
+  const invoke = handler("start_radare2_session");
+
+  const response = (await invokeWithLiveSignal(invoke, {
+    path: "/tmp/f",
+    initial_commands: ["__fail__"],
+  })) as { readonly isError?: boolean };
+
+  expect(response.isError).toBe(true);
+  const content = JSON.stringify(response);
+  expect(content).toContain('"cleanup":"incomplete"');
+  expect(content).toContain("session-1");
 });
 
 it("runs caller-selected initial commands inside the start admission", async () => {

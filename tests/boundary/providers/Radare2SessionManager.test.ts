@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
@@ -52,7 +52,13 @@ const createInjectedProcess = (
       stderr,
       exitCode: null,
       signalCode: null,
-      kill: vi.fn(() => true),
+      kill: vi.fn(() => {
+        if (handle.exitCode !== null) return false;
+        handle.exitCode = null;
+        handle.signalCode = "SIGTERM";
+        queueMicrotask(() => handle.emit("exit", null, "SIGTERM"));
+        return true;
+      }),
       stdin: new Writable({
         write: (chunk: Buffer, _encoding, callback) => {
           const text = chunk.toString("utf8");
@@ -73,6 +79,8 @@ const createInjectedProcess = (
     return {
       process: spawned.handle,
       ownership: {} as SpawnedOwnedProviderProcess["ownership"],
+      cleanup: async () =>
+        ({ cleaned: true as const, signaled: false }) as const,
     };
   });
   return { spawnProcess, control: first.control, written };
@@ -119,7 +127,16 @@ describe("Radare2SessionManager lifecycle", () => {
       expect(spawnProcess).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "/selected/r2",
-          arguments: ["-N", "-q", "-e", "scr.color=0", "-0", artifact],
+          arguments: [
+            "-N",
+            "-q",
+            "-e",
+            "scr.color=0",
+            "-e",
+            "scr.utf8=0",
+            "-0",
+            artifact,
+          ],
           stdin: "pipe",
         }),
       );
@@ -128,6 +145,42 @@ describe("Radare2SessionManager lifecycle", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("opens the caller-selected path without rewriting symlink-relative parents", async () => {
+    const { spawnProcess } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+    });
+    const manager = new Radare2SessionManager({}, { spawnProcess });
+    const selected = "/work/link/../sample";
+    // POSIX resolves `..` after the preceding symlink, so only Win32 may
+    // normalize it lexically.
+    const expected =
+      process.platform === "win32" ? win32.resolve(selected) : selected;
+
+    const started = await manager.start({ path: selected });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect(spawnProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arguments: [
+          "-N",
+          "-q",
+          "-e",
+          "scr.color=0",
+          "-e",
+          "scr.utf8=0",
+          "-0",
+          expected,
+        ],
+      }),
+    );
+    expect(manager.status(started.value.session_id)?.resolved_path).toBe(
+      expected,
+    );
+    await manager.closeAll();
   });
 
   it("executes a command over the r2pipe2 protocol and maps the reply", async () => {
@@ -347,6 +400,60 @@ describe("Radare2SessionManager command handling", () => {
 });
 
 describe("Radare2SessionManager r2pipe2 protocol failures", () => {
+  it("retires a session whose oversized reply stopped it", async () => {
+    const { spawnProcess } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+      onWrite: (_text, commandControl) => {
+        // Reply after the write returns: a synchronous frame would race the
+        // protocol check that runs before the manager waits for the reply.
+        queueMicrotask(() =>
+          commandControl.output(`${"a".repeat(16 * 1024 * 1024 + 1)}\0`),
+        );
+      },
+    });
+    const manager = new Radare2SessionManager(
+      {},
+      { spawnProcess, frameTimeoutMs: 5_000 },
+    );
+
+    const started = await manager.start({ path: "/tmp/f" });
+    if (!started.ok) throw started.error;
+    const executed = await manager.execute(
+      started.value.session_id,
+      "p8 100000000",
+    );
+    expect(executed.ok).toBe(true);
+    if (executed.ok) expect(executed.value.result.output_truncated).toBe(true);
+    expect(manager.status(started.value.session_id)).toBeUndefined();
+    await manager.closeAll();
+  });
+
+  it("retires a session whose process exits during a command", async () => {
+    const { spawnProcess } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+      onWrite: (_text, commandControl) => {
+        commandControl.exit(1);
+      },
+    });
+    const manager = new Radare2SessionManager(
+      {},
+      { spawnProcess, frameTimeoutMs: 5_000 },
+    );
+
+    const started = await manager.start({ path: "/tmp/f" });
+    if (!started.ok) throw started.error;
+    const executed = await manager.execute(started.value.session_id, "aflj");
+    expect(executed.ok).toBe(false);
+    if (!executed.ok)
+      expect(executed.error._tag).toBe("AnalysisCapabilityUnavailableError");
+    expect(manager.status(started.value.session_id)).toBeUndefined();
+    await manager.closeAll();
+  });
+
   it("stops the session when a r2pipe2 reply is not JSON", async () => {
     const { spawnProcess } = createInjectedProcess({
       startup: (control) => {
