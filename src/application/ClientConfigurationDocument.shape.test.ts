@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseClientConfiguration } from "./ClientConfigurationDocument.js";
+import { supportedClients } from "./SupportedClients.js";
 
 describe("parseClientConfiguration shape diagnostics", () => {
   it.each([
@@ -30,5 +31,25 @@ describe("parseClientConfiguration shape diagnostics", () => {
     expect(() => parseClientConfiguration("not-json", "json")).toThrow(
       SyntaxError,
     );
+  });
+});
+
+describe("Gemini CLI settings syntax", () => {
+  const format = supportedClients("/home/user", "linux", {}).find(
+    ({ name }) => name === "gemini_cli",
+  )?.format;
+
+  it("accepts comments, which Gemini CLI strips before parsing", () => {
+    expect(
+      parseClientConfiguration('{\n  // keep\n  "mcpServers": {}\n}', format)
+        .document,
+    ).toEqual({ mcpServers: {} });
+  });
+
+  it.each([
+    ["a trailing comma", '{"mcpServers": {},}'],
+    ["a UTF-8 BOM", '﻿{"mcpServers": {}}'],
+  ] as const)("rejects %s, which Gemini CLI cannot load", (_label, text) => {
+    expect(() => parseClientConfiguration(text, format)).toThrow(SyntaxError);
   });
 });
