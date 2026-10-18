@@ -482,6 +482,7 @@ export class Radare2SessionManager {
     let release!: () => void;
     session.pendingCommandCount += 1;
     let commandSent = false;
+    let acquired = false;
     const previous = session.commandTail;
     session.commandTail = new Promise<void>((resolve) => {
       // A cancelled waiter still holds the queue tail until its predecessor
@@ -493,6 +494,7 @@ export class Radare2SessionManager {
     });
     try {
       await waitForTurn(previous, signal);
+      acquired = true;
       if (signal?.aborted)
         return err(new AnalysisCancelledError("radare2_command"));
       if (
@@ -762,9 +764,11 @@ export class Radare2SessionManager {
       }
       return err(await this.#errorAfterProtocolFailure(session, cause));
     } finally {
-      // Command capture is per command: leaving it set would make later
-      // unsolicited frames look like command output and skip fail-closed cleanup.
-      session.commandCaptureActive = false;
+      // Command capture is per command, and it belongs to the command that holds
+      // the turn: a queued command cancelled before its turn must not clear the
+      // running command's capture state, or its oversized reply would be read as
+      // unsolicited output and dropped instead of delivered as truncation.
+      if (acquired) session.commandCaptureActive = false;
       session.pendingCommandCount -= 1;
       release();
     }

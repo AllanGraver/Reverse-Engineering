@@ -288,6 +288,50 @@ describe("Radare2SessionManager cancellation", () => {
     expect(written.at(-1)).toBe("q\n");
     expect(manager.status(started.value.session_id)).toBeUndefined();
   });
+
+  it("keeps the running command's capture state when a queued command is cancelled", async () => {
+    // Arrange
+    let ownerControl: InjectedControl | undefined;
+    const { spawnProcess, written } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+      onWrite: (_text, commandControl) => {
+        ownerControl = commandControl;
+      },
+    });
+    const manager = new Radare2SessionManager(
+      {},
+      { spawnProcess, frameTimeoutMs: 5_000 },
+    );
+    const started = await manager.start({ path: "/tmp/f" });
+    if (!started.ok) throw started.error;
+
+    // Act: the first command keeps running, the second is cancelled while queued.
+    const owner = manager.execute(started.value.session_id, "aaa");
+    await vi.waitFor(() =>
+      expect(written.some((line) => line.includes("aaa"))).toBe(true),
+    );
+    const controller = new AbortController();
+    const queued = manager.execute(
+      started.value.session_id,
+      "aflj",
+      controller.signal,
+    );
+    controller.abort();
+    const cancelled = await queued;
+    ownerControl?.output("a".repeat(16 * 1024 * 1024 + 1));
+    const result = await owner;
+
+    // Assert: the running command still sees a bounded, truncated reply.
+    expect(cancelled.ok).toBe(false);
+    if (!cancelled.ok)
+      expect(cancelled.error._tag).toBe("AnalysisCancelledError");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.result.output_truncated).toBe(true);
+    expect(manager.status(started.value.session_id)).toBeUndefined();
+    await manager.closeAll();
+  });
 });
 
 describe("Radare2SessionManager command handling", () => {
