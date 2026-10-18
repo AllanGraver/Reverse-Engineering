@@ -163,7 +163,6 @@ export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
   }),
   compare_with_radiff2: effects({
     launchesProcess: true,
-    mutatesSession: true,
     idempotent: false,
   }),
   inspect_go_binary: evidence,

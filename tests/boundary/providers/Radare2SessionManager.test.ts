@@ -257,6 +257,39 @@ describe("Radare2SessionManager lifecycle", () => {
   });
 });
 
+describe("Radare2SessionManager cancellation", () => {
+  it("stops and retires the session when a dispatched command is cancelled", async () => {
+    // Arrange
+    const { spawnProcess, written } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+    });
+    const manager = new Radare2SessionManager({}, { spawnProcess });
+    const started = await manager.start({ path: "/tmp/f" });
+    if (!started.ok) throw started.error;
+    const controller = new AbortController();
+
+    // Act
+    const executed = manager.execute(
+      started.value.session_id,
+      "aaa",
+      controller.signal,
+    );
+    await vi.waitFor(() =>
+      expect(written.some((line) => line.includes("aaa"))).toBe(true),
+    );
+    controller.abort();
+    const result = await executed;
+
+    // Assert
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error._tag).toBe("AnalysisCancelledError");
+    expect(written.at(-1)).toBe("q\n");
+    expect(manager.status(started.value.session_id)).toBeUndefined();
+  });
+});
+
 describe("Radare2SessionManager command handling", () => {
   it("rejects multiline commands before writing to stdin", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rea-r2-lines-"));
@@ -424,6 +457,35 @@ describe("Radare2SessionManager r2pipe2 protocol failures", () => {
       started.value.session_id,
       "p8 100000000",
     );
+    expect(executed.ok).toBe(true);
+    if (executed.ok) expect(executed.value.result.output_truncated).toBe(true);
+    expect(manager.status(started.value.session_id)).toBeUndefined();
+    await manager.closeAll();
+  });
+
+  it("delivers the bounded frame without waiting for a delimiter that never arrives", async () => {
+    const { spawnProcess } = createInjectedProcess({
+      startup: (control) => {
+        control.output("\0");
+      },
+      onWrite: (_text, commandControl) => {
+        queueMicrotask(() =>
+          commandControl.output("a".repeat(16 * 1024 * 1024 + 1)),
+        );
+      },
+    });
+    const manager = new Radare2SessionManager(
+      {},
+      { spawnProcess, frameTimeoutMs: 5_000 },
+    );
+
+    const started = await manager.start({ path: "/tmp/f" });
+    if (!started.ok) throw started.error;
+    const executed = await manager.execute(
+      started.value.session_id,
+      "p8 100000000",
+    );
+    // A stalled reply must fail closed at the limit, not consume the timeout.
     expect(executed.ok).toBe(true);
     if (executed.ok) expect(executed.value.result.output_truncated).toBe(true);
     expect(manager.status(started.value.session_id)).toBeUndefined();

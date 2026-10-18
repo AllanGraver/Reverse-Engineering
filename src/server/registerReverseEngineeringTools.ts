@@ -97,29 +97,13 @@ export const registerReverseEngineeringTools = (
               }),
             );
           },
-          (value, cause) => {
-            if (!value.ok)
-              return value.error.retainSecondaryFailure(cause, {
-                retirement_error: projectAnalysisError(cause),
-              });
-            const observation = value.value;
-            return new AnalysisOutputError(
+          (value, cause) =>
+            externalMutationRetirementFailure(
               rizin.name,
-              "Rizin may have changed the bound artifact, but the active analysis session could not be retired.",
-              {
-                cause,
-                ...(cause.cleanup === undefined
-                  ? {}
-                  : { cleanup: cause.cleanup }),
-                ...(cause.capturedOutput === undefined
-                  ? {}
-                  : { capturedOutput: cause.capturedOutput }),
-                ...(observation === undefined
-                  ? {}
-                  : { partialObservation: observation }),
-              },
-            );
-          },
+              "Rizin",
+              value,
+              cause,
+            ),
           rizin.name,
         );
         if (!admitted.ok)
@@ -225,29 +209,13 @@ export const registerReverseEngineeringTools = (
               }),
             );
           },
-          (value, cause) => {
-            if (!value.ok)
-              return value.error.retainSecondaryFailure(cause, {
-                retirement_error: projectAnalysisError(cause),
-              });
-            const observation = value.value;
-            return new AnalysisOutputError(
+          (value, cause) =>
+            externalMutationRetirementFailure(
               radare2.name,
-              "Radare2 may have changed the bound artifact, but the active analysis session could not be retired.",
-              {
-                cause,
-                ...(cause.cleanup === undefined
-                  ? {}
-                  : { cleanup: cause.cleanup }),
-                ...(cause.capturedOutput === undefined
-                  ? {}
-                  : { capturedOutput: cause.capturedOutput }),
-                ...(observation === undefined
-                  ? {}
-                  : { partialObservation: observation }),
-              },
-            );
-          },
+              "Radare2",
+              value,
+              cause,
+            ),
           radare2.name,
         );
         if (!admitted.ok)
@@ -345,3 +313,31 @@ const isEvidence = (value: unknown): value is Evidence =>
   value !== null &&
   "evidence_id" in value &&
   typeof value.evidence_id === "string";
+
+/**
+ * Keep a retirement failure attached to one unrestricted external command:
+ * a collected observation becomes the failing result's partial Evidence, and
+ * an already-failed result retains the retirement error as a secondary cause.
+ */
+const externalMutationRetirementFailure = (
+  operationName: string,
+  providerName: string,
+  value: Result<Evidence, AnalysisError>,
+  cause: AnalysisError,
+): AnalysisError =>
+  value.ok
+    ? new AnalysisOutputError(
+        operationName,
+        `${providerName} may have changed the bound artifact, but the active analysis session could not be retired.`,
+        {
+          cause,
+          ...(cause.cleanup === undefined ? {} : { cleanup: cause.cleanup }),
+          ...(cause.capturedOutput === undefined
+            ? {}
+            : { capturedOutput: cause.capturedOutput }),
+          partialObservation: value.value,
+        },
+      )
+    : value.error.retainSecondaryFailure(cause, {
+        retirement_error: projectAnalysisError(cause),
+      });

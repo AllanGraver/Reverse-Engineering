@@ -1,12 +1,12 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import type {
   DoctorProviderCheck,
   DoctorProviderInspection,
 } from "../application/Doctor.js";
+import {
+  execFileOutput,
+  execFileOutputFailure,
+} from "../process/ExecFileOutput.js";
 
-const execFileAsync = promisify(execFile);
 const VERSION_TIMEOUT_MS = 10_000;
 /** r2pipe2 replies (`{"cmd":…}`) ship with radare2 5.9. */
 const R2PIPE2_FLOOR = { major: 5, minor: 9 };
@@ -29,6 +29,8 @@ export const inspectRadare2Provider = async (
   options: {
     /** @internal Test seam; production callers run the real executable. */
     readonly runVersion?: (command: string) => Promise<VersionOutcome>;
+    /** Doctor inspection cancellation; a stopped probe still settles after exit. */
+    readonly signal?: AbortSignal;
   } = {},
 ): Promise<DoctorProviderInspection> => {
   const command = environment.REA_R2_COMMAND ?? "radare2";
@@ -36,15 +38,24 @@ export const inspectRadare2Provider = async (
     options.runVersion ??
     (async (selected: string) => {
       try {
-        const { stdout } = await execFileAsync(selected, ["-version"], {
+        const { stdout } = await execFileOutput(selected, ["-version"], {
           timeout: VERSION_TIMEOUT_MS,
           env: { ...environment },
+          stopSignal: "SIGTERM",
+          maxBuffer: 64 * 1024,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
         });
         return { ok: true, stdout };
       } catch (cause) {
+        const code = execFileOutputFailure(cause)?.code;
         return {
           ok: false,
-          code: (cause as NodeJS.ErrnoException).code ?? "runtime_failure",
+          code:
+            typeof code === "string"
+              ? code
+              : code === null || code === undefined
+                ? "runtime_failure"
+                : String(code),
         };
       }
     });

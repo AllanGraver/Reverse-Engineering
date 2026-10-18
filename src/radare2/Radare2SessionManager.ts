@@ -39,6 +39,8 @@ const MAX_COMMAND_FRAMES = 4096;
 const MAX_RECENT_FRAME_BYTES = 16 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const MAX_RECENT_STDERR_BYTES = 4 * 1024;
+/** Cap for partial frame text retained in a failure diagnostic. */
+const MAX_FAILURE_FRAME_BYTES = 4096;
 
 export const RADARE2_SESSION_PROVIDER_IDENTITY = {
   id: "radare2.session",
@@ -164,8 +166,9 @@ class Radare2ProcessExitError extends Error {
   constructor(
     readonly partialOutput: string,
     readonly outputInvalidUtf8 = false,
+    message = "The owned Radare2 process exited.",
   ) {
-    super("The owned Radare2 process exited.");
+    super(message);
   }
 }
 
@@ -358,8 +361,21 @@ export class Radare2SessionManager {
     });
     launched.process.once("exit", () => {
       session.exited = true;
+      // A process that exits mid-frame leaves a correlation-less tail. Report it
+      // as partial output instead of dropping the only bytes that arrived. The
+      // buffers stay intact so startup diagnostics can still include the tail.
+      const buffered = Buffer.concat(
+        session.frameChunks,
+        session.bufferedFrameBytes,
+      );
+      const partialOutput = buffered
+        .subarray(0, MAX_FAILURE_FRAME_BYTES)
+        .toString("utf8");
+      const partialInvalidUtf8 = buffered.length > 0 && !isUtf8(buffered);
       for (const waiter of session.frameWaiters)
-        waiter.reject(new Radare2ProcessExitError(""));
+        waiter.reject(
+          new Radare2ProcessExitError(partialOutput, partialInvalidUtf8),
+        );
       session.frameWaiters.length = 0;
     });
     try {
@@ -368,7 +384,11 @@ export class Radare2SessionManager {
       if (signal?.aborted)
         throw new AnalysisCancelledError("start_radare2_session");
       if (session.exited)
-        throw new Radare2ProcessExitError("Radare2 exited during startup.");
+        throw new Radare2ProcessExitError(
+          "",
+          false,
+          "Radare2 exited during startup.",
+        );
       if (session.protocolError !== undefined)
         throw new Error(session.protocolError);
       session.ready = true;
@@ -742,6 +762,9 @@ export class Radare2SessionManager {
       }
       return err(await this.#errorAfterProtocolFailure(session, cause));
     } finally {
+      // Command capture is per command: leaving it set would make later
+      // unsolicited frames look like command output and skip fail-closed cleanup.
+      session.commandCaptureActive = false;
       session.pendingCommandCount -= 1;
       release();
     }
@@ -763,7 +786,15 @@ export class Radare2SessionManager {
     if (session === undefined) return undefined;
     return {
       session_id: session.id,
-      state: session.ready && !session.exited ? "ready" : "closed",
+      // A stopped, closing, or protocol-failed session accepts no commands, so
+      // reporting it as ready would invite calls that can only fail.
+      state:
+        session.ready &&
+        !session.exited &&
+        !session.closing &&
+        session.protocolError === undefined
+          ? "ready"
+          : "closed",
       caller_selected_path: session.callerSelectedPath,
       resolved_path: session.resolvedPath,
       recent_output: [...session.history],
@@ -888,8 +919,9 @@ export class Radare2SessionManager {
       const piece = chunk.subarray(offset, end);
       if (session.discardingOversizedFrame) {
         if (boundary < 0) return;
+        // The bounded frame was already delivered when the limit was crossed;
+        // drain the remainder of this oversized frame without delivering twice.
         session.discardingOversizedFrame = false;
-        this.#deliverBufferedFrame(session, true);
         offset = nextOffset;
         continue;
       }
@@ -910,7 +942,10 @@ export class Radare2SessionManager {
           session.bufferedFrameBytes += remainingBytes;
         }
         if (boundary < 0) {
+          // Deliver the bounded frame now instead of waiting for a delimiter
+          // that may never arrive; the caller stops the session on truncation.
           session.discardingOversizedFrame = true;
+          this.#deliverBufferedFrame(session, true);
           return;
         }
         this.#deliverBufferedFrame(session, true);
@@ -1190,7 +1225,9 @@ const bufferedFrameText = (session: Radare2Session): string =>
 
 const boundedFrameBytes = (session: Radare2Session): Buffer => {
   const bytes = Buffer.concat(session.frameChunks, session.bufferedFrameBytes);
-  return bytes.length > 4096 ? bytes.subarray(0, 4096) : bytes;
+  return bytes.length > MAX_FAILURE_FRAME_BYTES
+    ? bytes.subarray(0, MAX_FAILURE_FRAME_BYTES)
+    : bytes;
 };
 
 const truncateUtf8 = (value: string, maximumBytes: number): string => {

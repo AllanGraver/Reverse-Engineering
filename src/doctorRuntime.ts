@@ -65,7 +65,7 @@ export const createSystemDoctorHost = (
       await inspectKunaProvider(environment, process.platform, {
         fileCloseResources,
       }),
-      await inspectRadare2Provider(environment),
+      await inspectRadare2Provider(environment, { signal: inspectionSignal }),
     ],
     linuxDemoRuntimeCheck: () =>
       inspectLinuxHopperDemoRuntime(environment, signal),
