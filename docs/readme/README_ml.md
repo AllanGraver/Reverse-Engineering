@@ -13,7 +13,7 @@
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5?style=flat-square)](../mcp-contracts.md#generated-catalog)
 [![Node.js requirements](https://img.shields.io/badge/Node.js-requirements-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-analyze)
 [![skills.sh](https://skills.sh/b/morluto/rea?style=flat-square)](https://skills.sh/morluto/rea/reverse-engineer-anything)
-[![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
+[![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](../../LICENSE)
 [![Discord](https://img.shields.io/discord/1556595354999332884?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/GkcryMnJDM)
 
 <a href="https://trendshift.io/repositories/82054?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-82054" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/82054" alt="morluto%2Frea | Trendshift" width="250" height="55"/></a>
@@ -36,7 +36,7 @@
 
 <br />
 
-<img src="docs/assets/rea-hopper-analysis.png" alt="ഒരു native binary പരിശോധിക്കുന്നതിനിടെ Hopper-ൽ REA അതിന്റെ analysis bridge ആരംഭിക്കുന്നു" width="1200" />
+<img src="../assets/rea-hopper-analysis.png" alt="ഒരു native binary പരിശോധിക്കുന്നതിനിടെ Hopper-ൽ REA അതിന്റെ analysis bridge ആരംഭിക്കുന്നു" width="1200" />
 
 <br /><br />
 
@@ -44,7 +44,7 @@
 <tr>
 <td align="center" width="360">
   <a href="https://discord.gg/GkcryMnJDM">
-    <img src="docs/assets/discord.svg" height="42" alt="Discord" /><br />
+    <img src="../assets/discord.svg" height="42" alt="Discord" /><br />
     <strong>Reverse Engineering കമ്മ്യൂണിറ്റിയിൽ ചേരുക</strong>
   </a><br />
   <sub>Discord · ചോദ്യോത്തരങ്ങൾ · അനുഭവങ്ങളും കണ്ടെത്തലുകളും പങ്കിടുക</sub>
@@ -287,7 +287,7 @@ npx rea-agents@latest setup
 - [Tool catalog](../mcp-contracts.md#generated-catalog): tools, providers, CLI commands എന്നിവയുടെ സ്വയമേവ സൃഷ്ടിച്ച പട്ടിക.
 - [Roadmap](../roadmap.md): ആസൂത്രണം ചെയ്ത പ്രവർത്തനങ്ങളും capability trackers-ഉം.
 
-സുരക്ഷാ ദുർബലതകൾ [SECURITY.md](SECURITY.md) വഴി റിപ്പോർട്ട് ചെയ്യുക.
+സുരക്ഷാ ദുർബലതകൾ [SECURITY.md](../../SECURITY.md) വഴി റിപ്പോർട്ട് ചെയ്യുക.
 
 ## Star ചരിത്രം
 
@@ -305,7 +305,7 @@ REA ഉപയോഗിക്കുന്നവർക്കും, bugs റിപ
 
 ## നിരാകരണം
 
-ഉത്തരവാദിത്തത്തോടെ ഉപയോഗിക്കുന്നതിനുള്ള മാർഗനിർദ്ദേശങ്ങൾക്ക് [DISCLAIMER.md](DISCLAIMER.md) കാണുക.
+ഉത്തരവാദിത്തത്തോടെ ഉപയോഗിക്കുന്നതിനുള്ള മാർഗനിർദ്ദേശങ്ങൾക്ക് [DISCLAIMER.md](../../DISCLAIMER.md) കാണുക.
 
 നിയമവിരുദ്ധമോ അനുമതിയില്ലാത്തതോ ആയ ഉപയോഗത്തെക്കുറിച്ചുള്ള project-ന്റെ നിലപാട് എല്ലാ REA versions-നും distribution channels-നും platforms-നും ബാധകമാണ്; ഓരോ copy-യും അതിന് ബാധകമായ licenses നിലനിർത്തുന്നു.
 
@@ -315,12 +315,12 @@ REA ഉപയോഗിക്കുന്നവർക്കും, bugs റിപ
 
 REA-യ്ക്കായി നിങ്ങളുടെ സഹായം ഞങ്ങൾ സ്വാഗതം ചെയ്യുന്നു! bug റിപ്പോർട്ട് ചെയ്യാനോ feature നിർദ്ദേശിക്കാനോ [issue തുറക്കുക](https://github.com/morluto/rea/issues), code അല്ലെങ്കിൽ docs മെച്ചപ്പെടുത്താൻ [pull request അയയ്ക്കുക](https://github.com/morluto/rea/pulls).
 
-Development setup-നും checks-നും [CONTRIBUTING.md](CONTRIBUTING.md), verification lanes-നായി [testing](../testing.md), project ഘടനയ്ക്കായി [architecture map](../architecture.mermaid) എന്നിവ കാണുക.
+Development setup-നും checks-നും [CONTRIBUTING.md](../../CONTRIBUTING.md), verification lanes-നായി [testing](../testing.md), project ഘടനയ്ക്കായി [architecture map](../architecture.mermaid) എന്നിവ കാണുക.
 
 ## ലൈസൻസ്
 
-[MIT](LICENSE)
+[MIT](../../LICENSE)
 
-REA-യുടെ രചയിതാക്കൾ സൃഷ്ടിച്ച code MIT license പ്രകാരമാണ് ലൈസൻസ് ചെയ്തിരിക്കുന്നത്. Third-party material അതിന്റെ സ്വന്തം licenses-ഉം copyright notices-ഉം നിലനിർത്തുന്നു; dependencies-ന്റെ പട്ടിക, നിലനിർത്തിയ license text-ുകൾ, external tool നിബന്ധനകൾ എന്നിവയ്ക്കായി [Third-party notices](THIRD_PARTY_NOTICES.md) കാണുക.
+REA-യുടെ രചയിതാക്കൾ സൃഷ്ടിച്ച code MIT license പ്രകാരമാണ് ലൈസൻസ് ചെയ്തിരിക്കുന്നത്. Third-party material അതിന്റെ സ്വന്തം licenses-ഉം copyright notices-ഉം നിലനിർത്തുന്നു; dependencies-ന്റെ പട്ടിക, നിലനിർത്തിയ license text-ുകൾ, external tool നിബന്ധനകൾ എന്നിവയ്ക്കായി [Third-party notices](../../THIRD_PARTY_NOTICES.md) കാണുക.
 
 **IDA Pro / Hex-Rays decompilers, Hopper, JEB എന്നിവ ഉൾപ്പെടെയുള്ള commercial tools നിയമാനുസൃതമായി സ്വന്തമാക്കുകയും അവയുടെ ബാധകമായ licenses പ്രകാരം ഉപയോഗിക്കാൻ അനുമതിയുണ്ടെന്ന് ഉറപ്പാക്കുകയും വേണം.** REA ഒരു tool license-ഓ key-യോ activation entitlement-ഓ നൽകുന്നില്ല. Trials-ഉം demos-ഉം ഉൾപ്പെടെ vendor നിബന്ധനകൾക്ക് വിധേയമാണ്; ഇതിൽ user, feature, automation, output sharing നിയന്ത്രണങ്ങളും ഉൾപ്പെടാം. Cracked copies, മോഷ്ടിച്ച keys, അനുമതിയില്ലാത്ത key sharing, license നിയന്ത്രണങ്ങൾ മറികടക്കൽ എന്നിവയ്ക്ക് അനുമതിയില്ല. ഈ മാർഗനിർദ്ദേശം MIT അല്ലെങ്കിൽ third-party licenses-ൽ മാറ്റം വരുത്തുന്നില്ല.

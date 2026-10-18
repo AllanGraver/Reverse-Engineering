@@ -46,6 +46,7 @@ export const registerErlangCommands = (
               service,
               "rea-erlang-beam",
               "inspect_erlang_beam",
+              signal,
             ),
         );
       }),
