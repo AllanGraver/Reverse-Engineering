@@ -26,7 +26,9 @@ import {
 } from "./CdpCaptureValues.js";
 import {
   captureFrames,
+  cdpFrameUrl,
   mainFrameUrl,
+  observeMainFrameUrl,
   walkFrameTrees,
 } from "./CdpCaptureDocuments.js";
 import { optionalCdpCommand } from "./CdpOptionalCommand.js";
@@ -63,9 +65,7 @@ export const discoverWebMcp = async (
     context.sessionId,
     context.signal,
   );
-  const initialUrl = mainFrameUrl(frameTree);
-  if (allowedSanitizedUrl(initialUrl, origins) === undefined)
-    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
+  const initialUrl = requiredDiscoveryFrameUrl(frameTree, origins);
   const frames = captureFrames(
     frameTree,
     origins,
@@ -236,7 +236,15 @@ const handleFrameUpdate = (
     state.completeness.exclude("webmcp_tools", "invalid_protocol_value");
     return true;
   }
-  const rawUrl = cdpStringValue(frame?.url);
+  const rawUrl = cdpFrameUrl(frame);
+  if (frame.urlFragment !== undefined && rawUrl === undefined) {
+    removeFrameTools(frameId, state.tools);
+    state.frames.delete(frameId);
+    state.transientFrames.add(frameId);
+    state.resolvedTransientFrames.delete(frameId);
+    state.completeness.exclude("webmcp_tools", "invalid_protocol_value");
+    return true;
+  }
   // Chromium can briefly commit an inherited, empty document while replacing
   // a subframe. That intermediate URL says nothing about the frame's eventual
   // scope or its registered tools; wait for the next committed URL (or the
@@ -249,17 +257,18 @@ const handleFrameUpdate = (
     }
     return true;
   }
-  updateFrameScope(frame, frameId, state, documentCommitted);
+  updateFrameScope(frame, frameId, rawUrl, state, documentCommitted);
   return true;
 };
 
 const updateFrameScope = (
   frame: UnknownRecord,
   frameId: string,
+  rawUrl: string | undefined,
   state: FrameScopeState,
   documentCommitted: boolean,
 ): void => {
-  const url = allowedSanitizedUrl(frame?.url, state.origins);
+  const url = allowedSanitizedUrl(rawUrl, state.origins);
   if (url === undefined || url.origin === null) {
     removeFrameTools(frameId, state.tools);
     state.frames.delete(frameId);
@@ -338,11 +347,27 @@ const assertStableAuthorizedFrame = async (
     context.sessionId,
     context.signal,
   );
-  const finalUrl = mainFrameUrl(finalTree);
-  if (allowedSanitizedUrl(finalUrl, origins) === undefined)
-    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
+  const finalUrl = requiredDiscoveryFrameUrl(finalTree, origins);
   if (finalUrl !== initialUrl)
     throw new BrowserObservationError("inspect_web_page", "target_changed");
+};
+
+const requiredDiscoveryFrameUrl = (
+  result: unknown,
+  origins: ReadonlySet<string>,
+): string => {
+  const observed = observeMainFrameUrl(result);
+  if (
+    observed.kind === "invalid_fragment" &&
+    allowedSanitizedUrl(observed.scopeUrl, origins) !== undefined
+  )
+    throw new BrowserObservationError("inspect_web_page", "protocol_error");
+  if (
+    observed.kind !== "observed" ||
+    allowedSanitizedUrl(observed.url, origins) === undefined
+  )
+    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
+  return observed.url;
 };
 
 interface WebMcpIngestOptions {
