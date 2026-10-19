@@ -52,6 +52,8 @@ import {
   semanticFactoryLoaderMemberAt,
   semanticFactoryRequireLoaderAt,
   semanticRequireLoaderAt,
+  semanticModuleRequireCallAt,
+  semanticModuleRequireReceiver,
 } from "./javascriptSemanticRequireOrigin.js";
 
 type JavaScriptCallLike =
@@ -69,7 +71,13 @@ export const inspectCall = (
   const { accumulator } = context;
   const name = calleeName(node.callee);
   const first = stringValue(node.arguments[0]);
-  const requireCall = requireCallSpecifier(node, bindings, context);
+  const deferredModuleRequire =
+    semanticModuleRequireReceiver(node) !== undefined ||
+    semanticModuleRequireCallAt(node, bindings, false);
+  if (deferredModuleRequire) accumulator.pendingModuleRequireCalls.push(node);
+  const requireCall = deferredModuleRequire
+    ? null
+    : requireCallSpecifier(node, bindings, context);
   if (requireCall !== null)
     addReference(context, {
       node,
@@ -249,6 +257,12 @@ const requireCallSpecifier = (
   bindings: JavaScriptSemanticAnalysisState,
   context: FindingContext,
 ): { readonly specifier: string | undefined } | null => {
+  // Parsing a module.require call does not establish the delegate's identity.
+  // Retain the unchecked load so graph ownership cannot read it as absence.
+  if (semanticModuleRequireCallAt(node, bindings)) {
+    context.accumulator.unknownFindings += 1;
+    return { specifier: undefined };
+  }
   const bareRequire = t.isIdentifier(node.callee, { name: "require" });
   if (bareRequire) {
     const loader = semanticRequireLoaderAt(
@@ -257,10 +271,25 @@ const requireCallSpecifier = (
       context.accumulator.factoryRequireBindingIds,
     );
     if (loader === "local") return null;
-    if (loader === "unknown") context.accumulator.unknownFindings += 1;
+    const binding =
+      loader === "create-require"
+        ? resolveSemanticBindingState(bindings, node.callee, "require")
+        : undefined;
+    const initializer =
+      binding === undefined
+        ? undefined
+        : semanticStableInitializer(binding, bindings)?.node;
+    const unknownBase =
+      loader === "create-require" &&
+      (!t.isCallExpression(initializer) ||
+        !isUnmodifiedImportMetaUrl(initializer.arguments[0], bindings));
+    if (loader === "unknown" || unknownBase)
+      context.accumulator.unknownFindings += 1;
     return {
       specifier:
-        loader === "unknown" ? undefined : argumentValue(node.arguments[0]),
+        loader === "unknown" || unknownBase
+          ? undefined
+          : argumentValue(node.arguments[0]),
     };
   }
   const factoryLoader = semanticFactoryRequireLoaderAt(
@@ -286,6 +315,26 @@ const requireCallSpecifier = (
     return { specifier: undefined };
   }
   return null;
+};
+
+/** Examine member-loader receivers only after shared alias mutation facts settle. */
+export const finishModuleRequireCalls = (
+  context: FindingContext,
+  bindings: JavaScriptSemanticAnalysisState,
+): void => {
+  for (const node of context.accumulator.pendingModuleRequireCalls) {
+    const call = requireCallSpecifier(node, bindings, context);
+    if (call !== null)
+      addReference(context, {
+        node,
+        kind: "require",
+        specifier: call.specifier,
+      });
+  }
+  context.accumulator.pendingModuleRequireCalls.length = 0;
+  context.accumulator.references.sort(
+    (left, right) => left.offset - right.offset,
+  );
 };
 
 const chunkLoadSpecifier = (

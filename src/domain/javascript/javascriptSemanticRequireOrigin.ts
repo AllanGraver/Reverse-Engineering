@@ -1,3 +1,9 @@
+import {
+  semanticProjectedSourcesAtRead as moduleObjectSourcesAtRead,
+  semanticNormalizeCapturedSelections,
+  semanticShiftCapturedSelections,
+  type SemanticCapturedSelection,
+} from "./javascriptSemanticProjectedSources.js";
 import * as t from "@babel/types";
 import { traverseJavaScriptAst } from "./javascriptSemanticTraversal.js";
 
@@ -9,6 +15,7 @@ import {
   commonJsWrapperBindingDeclaration,
   semanticResolutionBlocked,
   semanticStableInitializer,
+  semanticBindingHasPriorValueWrite,
   type JavaScriptSemanticAnalysisState,
 } from "./javascriptSemanticState.js";
 import {
@@ -19,9 +26,22 @@ import { semanticPropertyPathKeyMatches } from "./javascriptSemanticPropertyPath
 import { stringValue } from "./javascriptStaticAnalysisHelpers.js";
 import {
   semanticEffectTiming,
+  semanticBindingAtRead,
   semanticTopLevelEffectFollowsCapture,
 } from "./javascriptSemanticMutationInitializers.js";
 import { createSemanticModuleInterop } from "./javascriptModuleInterop.js";
+import { createSemanticReturnedReferences } from "./javascriptSemanticReturnedReferences.js";
+import { semanticIterationSources } from "./javascriptSemanticIterationSources.js";
+import {
+  semanticArrayPropertyReferences,
+  semanticObjectPropertyReferences,
+} from "./javascriptSemanticObjectReferences.js";
+import {
+  SemanticAliasSelections,
+  semanticAliasSelectionChoices,
+  type SemanticAliasSelectionPath,
+} from "./javascriptSemanticAliasSelections.js";
+import { SEMANTIC_ALIAS_SELECTION_LIMIT } from "./javascriptSemanticResourceLimits.js";
 
 export interface JavaScriptRequireOrigin {
   readonly origin: JavaScriptModuleOrigin;
@@ -34,6 +54,64 @@ export type JavaScriptRequireLoaderFact =
   | "create-require"
   | "local"
   | "unknown";
+
+const possibleCommonJsDelegateWriteStates =
+  new WeakSet<JavaScriptSemanticAnalysisState>();
+
+/** Source eligibility only; the shared write owner still proves receiver identity. */
+export const observePossibleCommonJsDelegateWrite = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): void => {
+  if (possibleCommonJsDelegateWriteStates.has(state)) return;
+  const target = t.isAssignmentExpression(node)
+    ? node.left
+    : t.isUpdateExpression(node) ||
+        t.isUnaryExpression(node, { operator: "delete" })
+      ? node.argument
+      : undefined;
+  if (
+    semanticIterationSources(node, state.parentsByNode.get(node) ?? null).some(
+      (source) => source.kind === "reference-store",
+    )
+  )
+    possibleCommonJsDelegateWriteStates.add(state);
+  if (
+    (t.isMemberExpression(target) || t.isOptionalMemberExpression(target)) &&
+    ["require", null].includes(
+      semanticStaticPropertyKey(target.property, target.computed),
+    )
+  )
+    possibleCommonJsDelegateWriteStates.add(state);
+  else if (t.isCallExpression(node) || t.isOptionalCallExpression(node))
+    possibleCommonJsDelegateWriteStates.add(state);
+};
+
+export const hasPossibleCommonJsDelegateWrite = (
+  state: JavaScriptSemanticAnalysisState,
+): boolean => possibleCommonJsDelegateWriteStates.has(state);
+
+/** Member effects settle at the shared indexing boundary, invalidating derived delegates. */
+export const invalidateSemanticRequireDelegateWrites = (
+  state: JavaScriptSemanticAnalysisState,
+): void => {
+  moduleRequireWrites.delete(state);
+  moduleReturnedReferences.delete(state);
+};
+
+const commonJsDelegateChangedAt = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): boolean =>
+  writesModuleRequire(state).some(
+    (write) => semanticEffectTiming(node, write, state) !== "after",
+  );
+
+const commonJsLoaderAt = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): JavaScriptRequireLoaderFact =>
+  commonJsDelegateChangedAt(node, state) ? "unknown" : "commonjs-loader";
 
 /** Classify a bare `require(...)` using the shared lexical binding owner. */
 export const semanticRequireLoaderAt = (
@@ -59,22 +137,24 @@ export const semanticRequireLoaderAt = (
       (write) => semanticEffectTiming(node, write, state) !== "after",
     )
       ? "unknown"
-      : "commonjs-loader";
+      : commonJsLoaderAt(node, state);
   }
   if (factoryBindingIds.has(binding.bindingId))
-    return binding.initializers.length === 0 ? "factory-loader" : "unknown";
+    return semanticBindingHasPriorValueWrite(node, binding, state)
+      ? "unknown"
+      : "factory-loader";
   if (
     binding.hostOrigin === "commonjs-wrapper" &&
     [...binding.declarationKinds].every((kind) => kind === "var")
   ) {
     if (binding.definitions.some(({ kind }) => kind === "function"))
       return "local";
-    return commonJsWrapperBindingHasPriorWrite(node, binding, state)
+    return semanticBindingHasPriorValueWrite(node, binding, state)
       ? "unknown"
-      : "commonjs-loader";
+      : commonJsLoaderAt(node, state);
   }
   if (isWrapperRequireInitializerCall(binding, node, state))
-    return "commonjs-loader";
+    return commonJsLoaderAt(node, state);
   const wrapperBinding = commonJsWrapperBindingDeclaration(
     loader,
     "require",
@@ -82,9 +162,9 @@ export const semanticRequireLoaderAt = (
   );
   if (
     wrapperBinding !== undefined &&
-    !commonJsWrapperBindingHasPriorWrite(node, wrapperBinding, state)
+    !semanticBindingHasPriorValueWrite(node, wrapperBinding, state)
   )
-    return "commonjs-loader";
+    return commonJsLoaderAt(node, state);
   if (isSemanticCreateRequireBinding(binding, state)) return "create-require";
   const initializer = semanticStableInitializer(binding, state)?.node;
   if (
@@ -100,42 +180,6 @@ export const semanticRequireLoaderAt = (
   )
     return "local";
   return "unknown";
-};
-
-const commonJsWrapperBindingHasPriorWrite = (
-  site: t.Node,
-  binding: NonNullable<ReturnType<typeof resolveSemanticBindingState>>,
-  state: JavaScriptSemanticAnalysisState,
-): boolean => {
-  const writes = state.bindingWrites.get(binding.bindingId) ?? [];
-  const declarationInitializers = binding.initializers
-    .map(({ node }) => node)
-    .filter(
-      (initializer) =>
-        !writes.some((write) => semanticNodeWithin(initializer, write, state)),
-    );
-  return (
-    writes.some(
-      (write) => semanticEffectTiming(site, write, state) !== "after",
-    ) ||
-    declarationInitializers.some(
-      (initializer) =>
-        semanticEffectTiming(site, initializer, state) !== "after",
-    )
-  );
-};
-
-const semanticNodeWithin = (
-  node: t.Node,
-  ancestor: t.Node,
-  state: JavaScriptSemanticAnalysisState,
-): boolean => {
-  let current: t.Node | undefined = node;
-  while (current !== undefined) {
-    if (current === ancestor) return true;
-    current = state.parentsByNode.get(current);
-  }
-  return false;
 };
 
 /** Classify a call through an exact recovered factory-loader binding. */
@@ -177,7 +221,9 @@ export const semanticFactoryLoaderMemberAt = (
   const binding = resolveSemanticBindingState(state, loader, loader.name);
   if (binding === undefined || !bindingIds.has(binding.bindingId))
     return undefined;
-  return binding.initializers.length === 0 ? "factory-loader" : "unknown";
+  return semanticBindingHasPriorValueWrite(node, binding, state)
+    ? "unknown"
+    : "factory-loader";
 };
 
 const isSemanticCreateRequireBinding = (
@@ -263,6 +309,347 @@ const moduleRequireWrites = new WeakMap<
   JavaScriptSemanticAnalysisState,
   readonly t.Node[]
 >();
+const moduleReturnedReferences = new WeakMap<
+  JavaScriptSemanticAnalysisState,
+  Map<
+    "direct-call" | "awaited-call",
+    ReturnType<typeof createSemanticReturnedReferences>
+  >
+>();
+
+type ModuleObjectSource = {
+  readonly node: t.Node;
+  readonly path: SemanticAliasSelectionPath;
+  readonly readAt?: t.Node | undefined;
+  readonly capturedSelections?:
+    | readonly SemanticCapturedSelection[]
+    | undefined;
+};
+
+const isCommonJsModuleObject = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+  includeUnknown = true,
+): boolean => hasCommonJsModuleSource(node, state, includeUnknown, "module");
+
+/** A captured delegate uses the same receiver and assignment ownership facts. */
+export const isCommonJsRequireDelegate = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+  includeUnknown = false,
+  readAt?: t.Node,
+): boolean =>
+  hasCommonJsModuleSource(node, state, includeUnknown, "delegate", readAt);
+
+const hasCommonJsModuleSource = (
+  node: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+  includeUnknown: boolean,
+  target: "module" | "delegate",
+  readAt?: t.Node,
+): boolean => {
+  type Work = ModuleObjectSource & {
+    readonly ancestors: ReadonlySet<object>;
+    /** Await occurs after this many requested outer property selections. */
+    readonly awaitDepths: readonly number[];
+  };
+  const pending: Work[] = [
+    { node, path: [], readAt, ancestors: new Set(), awaitDepths: [] },
+  ];
+  // Keep depths separate and join finite key alternatives at each source read.
+  const selections = new SemanticAliasSelections(() => {
+    state.valueResourceLimits.add("alias-selections");
+  });
+  const contexts = new WeakMap<
+    t.Node,
+    Map<
+      string,
+      {
+        readonly identities: Map<string, object>;
+      }
+    >
+  >();
+  const examined = new WeakSet<object>();
+  let additionalStates = 0;
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const value = unwrapJavaScriptExpression(next.node).node;
+    const { awaitDepths } = next;
+    const byMode =
+      contexts.get(value) ??
+      new Map<string, { readonly identities: Map<string, object> }>();
+    const modeKey = JSON.stringify([
+      awaitDepths,
+      next.readAt?.start,
+      next.readAt?.end,
+      next.capturedSelections?.map(({ at, depth }) => [
+        at.start,
+        at.end,
+        depth,
+      ]),
+    ]);
+    let context = byMode.get(modeKey);
+    if (context === undefined) {
+      context = { identities: new Map() };
+      byMode.set(modeKey, context);
+      contexts.set(value, byMode);
+    }
+    const path = selections.normalize(context, next.path);
+    if (selections.limited) return true;
+    const pathKey = JSON.stringify(path);
+    let identity = context.identities.get(pathKey);
+    if (identity === undefined) {
+      // Consumption contexts must not provide an unbounded second path to
+      // expansion beyond the shared selector budget.
+      if (
+        (byMode.size > 1 || context.identities.size > 0) &&
+        ++additionalStates > SEMANTIC_ALIAS_SELECTION_LIMIT
+      ) {
+        state.valueResourceLimits.add("alias-selections");
+        return true;
+      }
+      identity = {};
+      context.identities.set(pathKey, identity);
+    }
+    if (next.ancestors.has(identity)) {
+      if (includeUnknown) return true;
+      continue;
+    }
+    if (examined.has(identity)) continue;
+    examined.add(identity);
+    const ancestors = new Set([...next.ancestors, identity]);
+    const enqueueAt = (
+      depths: readonly number[],
+      ...sources: ModuleObjectSource[]
+    ) => {
+      pending.push(
+        ...sources.map((source) => ({
+          ...(next.readAt === undefined ? {} : { readAt: next.readAt }),
+          ...(next.capturedSelections === undefined
+            ? {}
+            : { capturedSelections: next.capturedSelections }),
+          ...source,
+          capturedSelections: semanticNormalizeCapturedSelections(
+            source.capturedSelections ?? next.capturedSelections,
+            source.path.length,
+          ),
+          ancestors,
+          awaitDepths: depths,
+        })),
+      );
+    };
+    const enqueue = (...sources: ModuleObjectSource[]) => {
+      enqueueAt(awaitDepths, ...sources);
+    };
+    if (t.isAwaitExpression(value)) {
+      enqueueAt(
+        [...new Set([...awaitDepths, path.length])].sort(
+          (left, right) => left - right,
+        ),
+        { node: value.argument, path },
+      );
+      continue;
+    }
+    if (t.isMemberExpression(value) || t.isOptionalMemberExpression(value)) {
+      enqueue({
+        node: value.object,
+        readAt: next.readAt ?? value,
+        capturedSelections: semanticShiftCapturedSelections(
+          next.capturedSelections,
+          1,
+        ),
+        path: [
+          semanticStaticPropertyKey(value.property, value.computed),
+          ...path,
+        ],
+      });
+      continue;
+    }
+    if (
+      path.length > 0 &&
+      (t.isObjectExpression(value) || t.isArrayExpression(value))
+    ) {
+      const [key, ...remaining] = path;
+      if (key !== undefined)
+        for (const choice of semanticAliasSelectionChoices(key))
+          enqueueAt(
+            // Awaiting a fresh container does not await one of its children.
+            awaitDepths.filter((depth) => depth !== path.length),
+            ...(t.isObjectExpression(value)
+              ? semanticObjectPropertyReferences(value, [choice], state)
+              : semanticArrayPropertyReferences(value, [choice])
+            ).map((source) => ({
+              node: source.node,
+              path: [...source.path, ...remaining],
+              capturedSelections: [
+                ...(semanticShiftCapturedSelections(
+                  next.capturedSelections,
+                  source.path.length - 1,
+                ) ?? []),
+                ...(source.capturedSelectionAt === undefined
+                  ? []
+                  : [
+                      {
+                        at: source.capturedSelectionAt,
+                        depth: source.path.length,
+                      },
+                    ]),
+              ],
+            })),
+          );
+      continue;
+    }
+    if (t.isConditionalExpression(value) || t.isLogicalExpression(value)) {
+      enqueue(
+        {
+          node: t.isConditionalExpression(value)
+            ? value.consequent
+            : value.left,
+          path,
+        },
+        {
+          node: t.isConditionalExpression(value)
+            ? value.alternate
+            : value.right,
+          path,
+        },
+      );
+      continue;
+    }
+    if (
+      t.isCallExpression(value) ||
+      t.isOptionalCallExpression(value) ||
+      t.isNewExpression(value)
+    ) {
+      let factories = moduleReturnedReferences.get(state);
+      if (factories === undefined) {
+        factories = new Map();
+        moduleReturnedReferences.set(state, factories);
+      }
+      const mode = awaitDepths.includes(path.length)
+        ? "awaited-call"
+        : "direct-call";
+      let returned = factories.get(mode);
+      if (returned === undefined) {
+        returned = createSemanticReturnedReferences(state, mode);
+        factories.set(mode, returned);
+      }
+      const returnedResult = returned(
+        value.callee,
+        t.isNewExpression(value) ? undefined : value,
+      );
+      if (returnedResult.unresolvedInvocation) return true;
+      enqueue(
+        ...returnedResult.references.map((source) => ({
+          node: source.node,
+          path: [...source.projection, ...path],
+          capturedSelections: semanticShiftCapturedSelections(
+            next.capturedSelections,
+            source.projection.length,
+          ),
+        })),
+      );
+      continue;
+    }
+    if (!t.isIdentifier(value)) continue;
+    const binding = resolveSemanticBindingState(state, value, value.name);
+    if (value.name === "module" && binding === undefined) {
+      if (
+        (target === "module"
+          ? path.length === 0
+          : path.length === 1 &&
+            semanticAliasSelectionChoices(path[0]!).some(
+              (key) =>
+                key === null || semanticPropertyPathKeyMatches(key, "require"),
+            )) &&
+        !semanticResolutionBlocked(state, value, "module")
+      )
+        return true;
+      continue;
+    }
+    if (binding === undefined) continue;
+    const read = semanticBindingAtRead(binding, value, state.parentsByNode);
+    if (
+      value.name === "module" &&
+      (target === "module"
+        ? path.length === 0
+        : path.length === 1 &&
+          semanticAliasSelectionChoices(path[0]!).some(
+            (key) =>
+              key === null || semanticPropertyPathKeyMatches(key, "require"),
+          )) &&
+      commonJsWrapperBindingDeclaration(value, "module", state) !== undefined &&
+      !read.hasDefiniteInitializer
+    )
+      return true;
+    const sources = moduleObjectSourcesAtRead(
+      binding,
+      value,
+      path,
+      state,
+      includeUnknown,
+      next.readAt ?? value,
+      next.capturedSelections,
+    );
+    if (sources === undefined) return true;
+    enqueue(
+      ...sources.map((source) => ({
+        ...source,
+        readAt: path.length === 0 ? undefined : (next.readAt ?? value),
+        capturedSelections: [
+          ...(semanticShiftCapturedSelections(
+            next.capturedSelections,
+            source.path.length - path.length,
+          ) ?? []),
+          ...(source.capturedSelections ?? []),
+        ],
+      })),
+    );
+  }
+  return false;
+};
+
+/** Select an unchecked member-loader receiver before its identity is examined. */
+export const semanticModuleRequireReceiver = (
+  node: t.CallExpression | t.OptionalCallExpression | t.NewExpression,
+): t.Node | undefined => {
+  let callee = unwrapJavaScriptExpression(node.callee).node;
+  while (
+    (t.isMemberExpression(callee) || t.isOptionalMemberExpression(callee)) &&
+    ["bind", "call", "apply"].includes(
+      semanticStaticPropertyKey(callee.property, callee.computed) ?? "",
+    )
+  )
+    // Capturing a bound delegate can load outside the visible module graph.
+    // Keep that possibility without asserting bind/call/apply is unmodified.
+    callee = unwrapJavaScriptExpression(callee.object).node;
+  return (t.isMemberExpression(callee) ||
+    t.isOptionalMemberExpression(callee)) &&
+    semanticStaticPropertyKey(callee.property, callee.computed) === "require"
+    ? callee.object
+    : undefined;
+};
+
+/** Recognize an unchecked module loader without asserting its current delegate. */
+export const semanticModuleRequireCallAt = (
+  node: t.CallExpression | t.OptionalCallExpression | t.NewExpression,
+  state: JavaScriptSemanticAnalysisState,
+  includeUnknown = true,
+): boolean => {
+  const receiver = semanticModuleRequireReceiver(node);
+  if (receiver !== undefined)
+    return isCommonJsModuleObject(receiver, state, includeUnknown);
+  let target = unwrapJavaScriptExpression(node.callee).node;
+  while (
+    (t.isMemberExpression(target) || t.isOptionalMemberExpression(target)) &&
+    ["bind", "call", "apply"].includes(
+      semanticStaticPropertyKey(target.property, target.computed) ?? "",
+    )
+  )
+    target = unwrapJavaScriptExpression(target.object).node;
+  // The callee is selected before the current invocation can escape or mutate
+  // its receiver. Earlier captured member reads retain their own source site.
+  return isCommonJsRequireDelegate(target, state, includeUnknown, node);
+};
 
 const writesModuleRequire = (
   state: JavaScriptSemanticAnalysisState,
@@ -274,24 +661,10 @@ const writesModuleRequire = (
   moduleRequireWrites.set(state, []);
   const writes: t.Node[] = [];
   const interop = createSemanticModuleInterop(state);
-  const isModuleObject = (
-    node: t.Node,
-    visited = new Set<string>(),
-  ): boolean => {
-    const value = unwrapJavaScriptExpression(node).node;
-    if (!t.isIdentifier(value)) return false;
-    if (value.name === "module")
-      return resolveSemanticBindingState(state, value, "module") === undefined
-        ? !semanticResolutionBlocked(state, value, "module")
-        : isUnmodifiedCommonJsWrapperBinding(value, "module", state);
-    const binding = resolveSemanticBindingState(state, value, value.name);
-    if (binding === undefined || visited.has(binding.bindingId)) return false;
-    const next = new Set(visited).add(binding.bindingId);
-    return (
-      binding.initializers.length > 0 &&
-      binding.initializers.every(({ node: init }) => isModuleObject(init, next))
-    );
-  };
+  const isModuleObject = (node: t.Node): boolean =>
+    // Only a retained module identity can revoke the host delegate. Escaping
+    // an unrelated local table is not evidence that it became the host module.
+    isCommonJsModuleObject(node, state, false);
   traverseJavaScriptAst(state.program, {
     enter: (node) => {
       const target = t.isAssignmentExpression(node)
@@ -300,34 +673,15 @@ const writesModuleRequire = (
             t.isUnaryExpression(node, { operator: "delete" })
           ? node.argument
           : undefined;
-      if (target !== undefined) {
-        const members: string[] = [];
-        let root: t.Node = target;
-        while (
-          t.isMemberExpression(root) ||
-          t.isOptionalMemberExpression(root)
-        ) {
-          const key = semanticStaticPropertyKey(root.property, root.computed);
-          if (key === null) break;
-          members.unshift(key);
-          root = root.object;
-        }
+      if (
+        t.isMemberExpression(target) ||
+        t.isOptionalMemberExpression(target)
+      ) {
+        const key = semanticStaticPropertyKey(target.property, target.computed);
         if (
-          members.length === 1 &&
-          members[0] === "require" &&
-          isModuleObject(root)
-        )
-          writes.push(node);
-        else if (
-          members.length === 0 &&
-          (t.isMemberExpression(target) ||
-            t.isOptionalMemberExpression(target)) &&
-          target.computed &&
-          semanticStaticPropertyKey(target.property, true) === null &&
+          (key === "require" || (key === null && target.computed)) &&
           isModuleObject(target.object)
         )
-          // An unknown computed key may be "require"; retain uncertainty rather
-          // than treating this direct delegate write as a proven unrelated slot.
           writes.push(node);
       }
       if (t.isCallExpression(node) || t.isOptionalCallExpression(node)) {
@@ -508,17 +862,7 @@ export const semanticRequireOrigin = (
     !t.isIdentifier(current.callee, { name: "require" })
   )
     return undefined;
-  if (
-    writesModuleRequire(state).some(
-      (write) =>
-        !semanticTopLevelEffectFollowsCapture(
-          current,
-          write,
-          state.parentsByNode,
-        ),
-    )
-  )
-    return undefined;
+  if (commonJsDelegateChangedAt(current, state)) return undefined;
   const requireBinding = resolveSemanticBindingState(
     state,
     current.callee,
