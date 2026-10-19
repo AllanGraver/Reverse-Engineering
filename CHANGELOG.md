@@ -1,5 +1,85 @@
 # Changelog
 
+## [6.8.0](https://github.com/morluto/rea/compare/rea-agents-6.7.0...rea-agents-6.8.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **reference:** Partial reference-source reader results report failed root enumeration in rootFailure instead of a failed directory child at path ".". Historical source graphs preserve the root failure as a top-level limitation.
+* **process:** Filesystem enumeration omission reasons now also include entry_unavailable and identity_changed. Clients validating the old literal reason must accept the expanded capture schema.
+* **apktool:** Numeric legacy locale selectors such as es-r419 are rejected. Use es-419 or b+es+419. Two-letter region selectors remain supported.
+* **plist:** Unresolved XML scalar values now use $plist_type unknown wrappers with element, literal and reason. This replaces the former real/null unknown marker and malformed scalar prefix fallback. Supported extended UTC years now preserve their timestamp.
+
+### Features
+
+* **analysis-view:** project an environment manifest from web network captures ([#4954](https://github.com/morluto/rea/issues/4954)) ([291059a](https://github.com/morluto/rea/commit/291059adb4dabc768f91d9da0ba93007d7ab6822))
+
+
+### Bug Fixes
+
+* **adb:** preserve command failure target identities ([8307ea3](https://github.com/morluto/rea/commit/8307ea3717b9bbc6b5cf83d96a0f73d47708e586)), closes [#4641](https://github.com/morluto/rea/issues/4641) [#4643](https://github.com/morluto/rea/issues/4643) [#5051](https://github.com/morluto/rea/issues/5051)
+* **apktool:** select numeric regions using Android b+ qualifiers ([29910d1](https://github.com/morluto/rea/commit/29910d16b98fe4b607a7aa15928789a73614b0b9))
+* **artifacts:** share bounded ASAR signature observations ([e8da7e1](https://github.com/morluto/rea/commit/e8da7e1edd075feec0e6beedec93d5645fed8125)), closes [#3574](https://github.com/morluto/rea/issues/3574) [#5188](https://github.com/morluto/rea/issues/5188)
+* **browser:** isolate web bundle analysis with bounded partial results ([9aca543](https://github.com/morluto/rea/commit/9aca543f46085f502dbc5445002e129e5d2974e9))
+* **browser:** preserve caller cancellation through CDP observations ([7f4e7d5](https://github.com/morluto/rea/commit/7f4e7d5577adf2f4ea6edf869cbb35a43469b8d3))
+* **browser:** retain historical capture outcomes through cleanup ([2e5171e](https://github.com/morluto/rea/commit/2e5171e391b83f8a467d0861fd452c1f78621fd8))
+* **domain:** preserve partial reference comparison facts ([92dadf9](https://github.com/morluto/rea/commit/92dadf93344296516b960487d2f49c0f67e246fa)), closes [#4210](https://github.com/morluto/rea/issues/4210) [#5131](https://github.com/morluto/rea/issues/5131)
+* **electron:** preserve callback ownership through listener removal ([dfe8378](https://github.com/morluto/rea/commit/dfe8378cf5a727e3d93d47a5986233175c6ef898)), closes [#4513](https://github.com/morluto/rea/issues/4513)
+* **errors:** retain secondary failures without replacing primary causes ([d4e2339](https://github.com/morluto/rea/commit/d4e233946a39574e36a0d927b13eb77528ad5dc5)), closes [#5059](https://github.com/morluto/rea/issues/5059)
+* **frida:** preserve script evidence through cancellation and decoding ([048d707](https://github.com/morluto/rea/commit/048d70755ea9ca1d0d159ac78285d62a7ae00b21)), closes [#3979](https://github.com/morluto/rea/issues/3979) [#3396](https://github.com/morluto/rea/issues/3396)
+* **hopper:** verify and repair the Linux embedding runtime ([#5041](https://github.com/morluto/rea/issues/5041)) ([b0b485a](https://github.com/morluto/rea/commit/b0b485abff802b79d238dd24a9fa4abd0713d3ee))
+* **investigation:** scope automatic unknowns to result Evidence ([95c8f57](https://github.com/morluto/rea/commit/95c8f57aa2eafab4c8d7d43482b33ceefaf96b16)), closes [#3333](https://github.com/morluto/rea/issues/3333)
+* **javascript:** converge cyclic aliases with explicit projection widening ([e4c3d72](https://github.com/morluto/rea/commit/e4c3d72396bf925a45724ce8b18b238b0d23d787)), closes [#4348](https://github.com/morluto/rea/issues/4348) [#5138](https://github.com/morluto/rea/issues/5138) [#4349](https://github.com/morluto/rea/issues/4349) [#4364](https://github.com/morluto/rea/issues/4364)
+* **mcp:** preserve procedure aliases and complete name ambiguity ([d3627b1](https://github.com/morluto/rea/commit/d3627b10382b0f28b12cad1543634e165470b29a)), closes [#4623](https://github.com/morluto/rea/issues/4623)
+* **native:** bound LLDB PID reads before validation ([292e7be](https://github.com/morluto/rea/commit/292e7bef27c983853841894f56984a6566319972)), closes [#5057](https://github.com/morluto/rea/issues/5057)
+* **native:** preserve partial call reference evidence ([a80575c](https://github.com/morluto/rea/commit/a80575c73652d8b43d7340654a48bd20a4eb966d)), closes [#5130](https://github.com/morluto/rea/issues/5130)
+* **native:** retain LLDB evidence prefixes after read failures ([eb2c3b5](https://github.com/morluto/rea/commit/eb2c3b589eeb2884761b30d5b0402aa2d9337b49)), closes [#5058](https://github.com/morluto/rea/issues/5058)
+* **native:** retain partial call routes and omitted sites ([6588435](https://github.com/morluto/rea/commit/65884350ff3373f2adc7337c1945eeb54334693f)), closes [#5073](https://github.com/morluto/rea/issues/5073) [#3922](https://github.com/morluto/rea/issues/3922) [#5128](https://github.com/morluto/rea/issues/5128)
+* **native:** retain signature roots until descriptor cleanup completes ([9e259f8](https://github.com/morluto/rea/commit/9e259f87c8be3d22a0b96f12ed7838830869c987)), closes [#5052](https://github.com/morluto/rea/issues/5052)
+* **native:** retain UI interruption source through final cleanup ([36d156f](https://github.com/morluto/rea/commit/36d156ff05f48f9f0b4c4abb8f7c899249a49ebf)), closes [#5056](https://github.com/morluto/rea/issues/5056)
+* **native:** validate LLDB readback encoding before reporting facts ([7201e8a](https://github.com/morluto/rea/commit/7201e8a4439b3ece4a5470014525ea2e13e4c183)), closes [#5055](https://github.com/morluto/rea/issues/5055)
+* **plist:** ignore processing instructions between container members ([fd728f2](https://github.com/morluto/rea/commit/fd728f271e7de7bcfa63890b573715720d5f948c)), closes [#4964](https://github.com/morluto/rea/issues/4964)
+* **plist:** preserve source semantics in XML data decoding ([cee95b2](https://github.com/morluto/rea/commit/cee95b2ae6a19122de95103b2d23bc6f8c9c4428)), closes [#4978](https://github.com/morluto/rea/issues/4978)
+* **plist:** preserve unknown XML scalar identities ([3537e58](https://github.com/morluto/rea/commit/3537e58c1ab29309f06eabf50bc52adba9817a0c)), closes [#4852](https://github.com/morluto/rea/issues/4852)
+* **process:** await owned observation commands through finalization ([ca71e91](https://github.com/morluto/rea/commit/ca71e91d23672646af917ede8ae82c7fea395341)), closes [#5199](https://github.com/morluto/rea/issues/5199) [#5202](https://github.com/morluto/rea/issues/5202)
+* **process:** gate launch and retain cancellation provenance ([d6ca7b3](https://github.com/morluto/rea/commit/d6ca7b3f20a273823c50d6253f0b6f34f3876f53)), closes [#4512](https://github.com/morluto/rea/issues/4512) [#5142](https://github.com/morluto/rea/issues/5142)
+* **process:** preserve cancellation through liveness rechecks ([3927542](https://github.com/morluto/rea/commit/39275420ea18ad803eccfcc2702865b98ed36e44)), closes [#5205](https://github.com/morluto/rea/issues/5205)
+* **process:** preserve cleanup ownership through retries and close ([974487f](https://github.com/morluto/rea/commit/974487f00f2d68912c7c2c9e033a2760a343a82e)), closes [#5144](https://github.com/morluto/rea/issues/5144) [#5163](https://github.com/morluto/rea/issues/5163) [#5166](https://github.com/morluto/rea/issues/5166)
+* **process:** preserve partial sampling observations and shutdown gaps ([ba866a2](https://github.com/morluto/rea/commit/ba866a26ecbe179a717e746cbc0d1605ae616ad5)), closes [#5081](https://github.com/morluto/rea/issues/5081) [#5194](https://github.com/morluto/rea/issues/5194)
+* **process:** retain partial filesystem snapshot observations ([c85b44e](https://github.com/morluto/rea/commit/c85b44e1b14851c54e65327a4807f79ad5cd5a61))
+* **process:** retain snapshot handles and partial read outcomes ([9af0b61](https://github.com/morluto/rea/commit/9af0b6113c81803f88ec7d242e8fabaaa5d7f1f3))
+* **reference:** preserve symlink races and root failure facts ([6296fdf](https://github.com/morluto/rea/commit/6296fdf560f1ac4aa55985558edaa98300aacdbc))
+* **runtime:** retain Inspector and Electron cleanup ownership ([87ab054](https://github.com/morluto/rea/commit/87ab054ea384b3fcbae2998b1f94685edcd5f624))
+* **session:** admit direct native dispatch metadata providers ([50b6975](https://github.com/morluto/rea/commit/50b6975d861069e2c6cfa202780621449f863802)), closes [#5070](https://github.com/morluto/rea/issues/5070)
+* **session:** align call relationship discovery with traversal modes ([1d5bf5f](https://github.com/morluto/rea/commit/1d5bf5ff084b49c1c630a312520c59d6b08c6ade)), closes [#4687](https://github.com/morluto/rea/issues/4687) [#5068](https://github.com/morluto/rea/issues/5068)
+* **session:** describe native UI trace source routes ([32f0e51](https://github.com/morluto/rea/commit/32f0e5120966be59d17a1e092353816c76a9c5e2)), closes [#5071](https://github.com/morluto/rea/issues/5071)
+* **setup:** treat empty APPDATA as unset for VS Code, Trae and Devin ([#5126](https://github.com/morluto/rea/issues/5126)) ([273bb66](https://github.com/morluto/rea/commit/273bb662763406662b4c061887397e9e5f27aa4d))
+* **tests:** preserve temporary fixture ownership ([093ce69](https://github.com/morluto/rea/commit/093ce695f0a7c3407c7fde520ed8b20c0981b408))
+* **tests:** restore Android prerequisite verification ([23f984b](https://github.com/morluto/rea/commit/23f984b1a884baefc3c44e4ab697f6eff61dffb6))
+* **uninstall:** preflight repeated registration ownership ([22ddd82](https://github.com/morluto/rea/commit/22ddd820143b0ce455756b24acf60ed251286622)), closes [#4976](https://github.com/morluto/rea/issues/4976)
+* **uninstall:** retain per-file partial outcomes ([559af3d](https://github.com/morluto/rea/commit/559af3d3ff4b0236d468e80788c82d5a85b102da)), closes [#5079](https://github.com/morluto/rea/issues/5079)
+
+
+### Performance Improvements
+
+* **hopper:** reuse decoded records for literal string matches ([#5017](https://github.com/morluto/rea/issues/5017)) ([63c9708](https://github.com/morluto/rea/commit/63c970812b8b5c6664400c9360e22c427844820c))
+
+
+### Code Refactoring
+
+* **process:** share ownership for isolated analysis workers ([715d93e](https://github.com/morluto/rea/commit/715d93e954f238e009d9a425b6c430ce131eb51b))
+
+
+### Documentation
+
+* **jeb:** qualify Linux CE native workflows ([#5002](https://github.com/morluto/rea/issues/5002)) ([c12d9ed](https://github.com/morluto/rea/commit/c12d9eda87aa5a022ee7e18ea96d8d03bfd12e96)), closes [#4996](https://github.com/morluto/rea/issues/4996)
+* **manifest:** align plan with top-level body parsing ([fdaffe2](https://github.com/morluto/rea/commit/fdaffe21cc03ed9a46c69ba057b1d89947b72b83))
+
+
+### Tests
+
+* **contracts:** align plist and UI finalization regressions ([d1adc60](https://github.com/morluto/rea/commit/d1adc607952472b6db87d1fe5af4ba241f759f6e))
+
 ## [6.7.0](https://github.com/morluto/rea/compare/rea-agents-6.6.0...rea-agents-6.7.0) (2026-10-18)
 
 ### Highlights
