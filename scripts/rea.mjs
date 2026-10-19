@@ -103,8 +103,16 @@ if (!(await compiledRuntimeExists(runtimeFiles))) {
           if (output.length > 0) wroteOutput = true;
           writeStdout(output);
         },
-        // A command failure caused by the closed pipe keeps the pipe's status.
-        exit: (code) => process.exit(stdoutClosed ? SIGPIPE_EXIT_STATUS : code),
+        exit: (code) => {
+          // Incur can request an exit immediately after writing a diagnostic.
+          // Wait for earlier stdout writes, including backpressured pipe output,
+          // without keeping unrelated runtime handles alive after a failure.
+          process.stdout.write("", (cause) => {
+            if (cause?.code === "EPIPE") stdoutClosed = true;
+            else if (cause) throw cause;
+            process.exit(stdoutClosed ? SIGPIPE_EXIT_STATUS : code);
+          });
+        },
       });
     } catch (cause) {
       if (wroteOutput) throw cause;
