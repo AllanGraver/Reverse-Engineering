@@ -28,6 +28,9 @@ import { registerGoTools } from "./registerGoTools.js";
 import { createRustBinaryService } from "../composition/rust.js";
 import type { RustBinaryService } from "../application/rust/RustBinaryService.js";
 import { registerRustTools } from "./registerRustTools.js";
+import { createPythonPycService } from "../composition/pythonPyc.js";
+import type { PythonPycService } from "../application/python/PythonPycService.js";
+import { registerPythonPycTool } from "./registerPythonPycTool.js";
 import type { RecordedCrashService } from "../application/binaryDiagnostics/RecordedCrashService.js";
 import { registerAnalysisViewTool } from "./registerAnalysisViewTool.js";
 import { registerBinaryDiagnosticsTools } from "./registerBinaryDiagnosticsTools.js";
@@ -159,6 +162,7 @@ export interface CreateServerOptions {
   readonly binaryLayout?: BinaryLayoutService;
   readonly goBinary?: GoBinaryService;
   readonly rustBinary?: RustBinaryService;
+  readonly pythonPyc?: PythonPycService;
   readonly electronFuses?: ElectronFuseService;
   readonly recordedCrash?: RecordedCrashService;
   readonly firmwareAnalysis?: FirmwareAnalysisPort;
@@ -313,6 +317,7 @@ export const createServer = (
   const rustBinary = options.rustBinary ?? createRustBinaryService();
   const peResources = createPeResourcesService();
   const electronFuses = options.electronFuses ?? createElectronFuseService();
+  const pythonPyc = options.pythonPyc ?? createPythonPycService();
   const webNetworkCapture =
     options.webNetworkCapture ?? createWebNetworkCaptureService(environment);
   const javascriptRecovery =
@@ -396,6 +401,7 @@ export const createServer = (
       rustBinary.close(),
       peResources.close(),
       electronFuses.close(),
+      pythonPyc.close(),
       webNetworkCapture.close(),
       javascriptRecovery.close?.() ?? Promise.resolve(),
       ...(options.optionalObservationProviderOwner === "caller"
@@ -458,6 +464,7 @@ export const createServer = (
     rustBinary,
     peResources,
     electronFuses,
+    pythonPyc,
     webNetworkCapture,
   };
   registerBinaryAnalysisTools(toolContext);
@@ -657,6 +664,7 @@ const registerConfiguredAnalysisTools = (
     goBinary,
     rustBinary,
     peResources,
+    pythonPyc,
     webNetworkCapture,
   }: ServerToolContext,
   android: AndroidAnalysisPort,
@@ -713,6 +721,13 @@ const registerConfiguredAnalysisTools = (
   registerRustTools(
     server,
     rustBinary,
+    toolLogger,
+    recordEvidence,
+    withAdmittedAnalysis,
+  );
+  registerPythonPycTool(
+    server,
+    pythonPyc,
     toolLogger,
     recordEvidence,
     withAdmittedAnalysis,
@@ -826,6 +841,7 @@ interface ServerToolContext extends ReturnType<typeof createSessionRecorders> {
   readonly rustBinary: RustBinaryService;
   readonly peResources: PeResourcesService;
   readonly electronFuses: ElectronFuseService;
+  readonly pythonPyc: PythonPycService;
   readonly webNetworkCapture: WebNetworkCaptureService;
   readonly artifactResources: ArtifactResourceScope;
   readonly server: EvidenceMcpServer;

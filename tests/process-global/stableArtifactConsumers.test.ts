@@ -54,6 +54,8 @@ import {
 import { ArtifactResourceScope } from "../../src/artifacts/ArtifactResourceScope.js";
 import { ArtifactReaderFailure } from "../../src/artifacts/ArtifactReader.js";
 import { GoBinaryProvider } from "../../src/go/GoBinaryProvider.js";
+import { PythonPycProvider } from "../../src/python/PythonPycProvider.js";
+import { inspectPythonPycInputSchema } from "../../src/domain/python/pythonPyc.js";
 import { PeResourcesProvider } from "../../src/native/pe/PeResourcesProvider.js";
 import { inspectPeResourcesInputSchema } from "../../src/domain/native/peResources.js";
 import { peResourceFixture } from "../../src/native/pe/PeResources.fixture.js";
@@ -195,6 +197,30 @@ it.each(staticProviders)(
     }
   },
 );
+it("clears the Python pyc cleanup flag once a retained descriptor closes", async () => {
+  const path = await selectedImage();
+  const provider = new PythonPycProvider();
+  const primary = new ArtifactReaderFailure(
+    "integrity",
+    "controlled source replacement",
+  );
+  fault.readFailure = { cause: primary };
+  try {
+    const result = await provider.inspect(
+      inspectPythonPycInputSchema.parse({ path }),
+    );
+    if (result.ok)
+      throw new Error("Expected primary failure and retained descriptor");
+    expect(result.error.cleanupIncomplete).toBe(true);
+    fault.blocked.clear();
+    await provider.close();
+    expect(result.error.cleanupIncomplete).toBe(false);
+  } finally {
+    fault.blocked.clear();
+    await provider.close();
+  }
+});
+
 afterEach(async () => {
   fault.blockNew = false;
   fault.blocked.clear();
